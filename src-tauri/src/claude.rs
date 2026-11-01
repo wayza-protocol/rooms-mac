@@ -102,9 +102,11 @@ pub struct Run {
     pub session: Option<String>,
 }
 
-// A photo for Claude to see: its media type (image/jpeg, png, gif or webp) and its bytes in base64.
+// A photo or document for Claude: its media type (image/jpeg, png, gif or webp, application/pdf: bytes in base64) or
+// text/plain (the file's words as they are), and the file's name.
 pub struct Image {
     pub media_type: String,
+    pub name: String,
     pub data: String,
 }
 
@@ -145,7 +147,11 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: 
     let mut child = cmd.spawn()?;
     if let Some(mut stdin) = child.stdin.take() {
         let mut content = vec![json!({ "type": "text", "text": prompt })];
-        content.extend(images.iter().map(|i| json!({ "type": "image", "source": { "type": "base64", "media_type": i.media_type, "data": i.data } })));
+        content.extend(images.iter().map(|i| match i.media_type.as_str() {
+            "application/pdf" => json!({ "type": "document", "title": i.name, "source": { "type": "base64", "media_type": "application/pdf", "data": i.data } }),
+            "text/plain" => json!({ "type": "text", "text": format!("The file {} (JSON name), as sent:\n{}", serde_json::to_string(&i.name).unwrap_or_default(), i.data) }),
+            _ => json!({ "type": "image", "source": { "type": "base64", "media_type": i.media_type, "data": i.data } }),
+        }));
         let line = json!({ "type": "user", "message": { "role": "user", "content": content } }).to_string() + "\n";
         stdin.write_all(line.as_bytes()).await?;
         drop(stdin);
