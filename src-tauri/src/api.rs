@@ -47,6 +47,9 @@ impl Api {
     pub async fn put(&self, path: &str, bearer: &str, body: Value) -> Result<Value> {
         self.call(reqwest::Method::PUT, path, Some(bearer), Some(body)).await
     }
+    pub async fn delete(&self, path: &str, bearer: &str) -> Result<Value> {
+        self.call(reqwest::Method::DELETE, path, Some(bearer), None).await
+    }
 
     // Rooms help as plain text (wayza.com/help/rooms.txt), the same words people read at wayza.com/help.
     // Short timeout: Claude waits on this before answering, so a slow wayza.com must not hold up a turn.

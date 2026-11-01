@@ -9,7 +9,7 @@ on:
 
 jobs:
   mac:
-    runs-on: macos-14
+    runs-on: macos-15  # macos-14 images retire on 2 Nov 2026 (actions/runner-images#13518)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

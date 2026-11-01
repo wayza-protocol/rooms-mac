@@ -129,6 +129,9 @@ fn init_script(app: &App) -> String {
   document.addEventListener('wayza-get-claude-code', function () {{ inv('get_claude_code'); }});
   document.addEventListener('wayza-signin', function () {{ inv('claude_sign_in'); }});
   document.addEventListener('wayza-use-this-mac', function () {{ inv('use_this_mac'); }});
+  document.addEventListener('wayza-help', function () {{ inv('open_help'); }});
+  document.addEventListener('wayza-notification-settings', function () {{ inv('notification_settings'); }});
+  document.addEventListener('wayza-sign-out', function () {{ inv('sign_out'); }});
 }})();"#,
         origin = serde_json::to_string(&url::Url::parse(BASE).unwrap().origin().ascii_serialization()).unwrap(),
         st = st
@@ -337,6 +340,49 @@ async fn listen(h: &AppHandle, app: &Shared, session: &str) -> Result<()> {
         tauri::async_runtime::spawn(async move { on_event(&h2, &app2, ev).await });
     }
     Ok(())
+}
+
+// ---------- the face menu (FaceMenu1): Help, Notifications, Sign out ----------
+
+// Help opens in the browser: the app keeps wayza.com's own pages in its window, but Help is for reading beside it.
+#[tauri::command]
+fn open_help(h: AppHandle) {
+    let _ = h.opener().open_url(format!("{BASE}/help/"), None::<&str>);
+}
+
+// The app's notifications are macOS's, so "Notifications" is macOS's own settings for Wayza.
+#[tauri::command]
+fn notification_settings(h: AppHandle) {
+    let id = h.config().identifier.clone();
+    let _ = h.opener().open_url(format!("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={id}"), None::<&str>);
+}
+
+// Signing out from the menu: the page has already ended the window's session on wayza.com. The app first tells
+// wayza.com your Claude is signed out, if this Mac is the one running it (so rooms show it, NoticeB3, instead of "Claude is on" with nobody
+// answering) and ends its own session there too. Then it forgets both Keychain entries it keeps (the sign-in and your
+// Claude's key), who you are, your Claude and each room's Claude conversation, so whoever uses this Mac next can't act
+// as you or as your Claude. Then MacFirst1. If wayza.com can't be reached, it still forgets everything here.
+#[tauri::command]
+async fn sign_out(h: AppHandle) {
+    let app = h.state::<Shared>().inner().clone();
+    if let Some(session) = app.session() {
+        // Only when this Mac is the one running your Claude: the PUT makes its Mac the active one, so from here it
+        // would take your Claude away from your other Mac.
+        if this_mac_runs_ai(&app).await {
+            let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "signed_out": ["claude"] })).await;
+        }
+        let _ = app.api.delete("/me/session", &session).await;
+    }
+    auth::forget("ai:claude");
+    {
+        let mut s = app.saved.lock().unwrap();
+        s.me = None;
+        s.ai = None;
+        s.rooms.clear();
+    }
+    app.save();
+    log("signed out from the menu");
+    signed_out(&h);
 }
 
 // The session ended (signed out, a new password, 30 days): back to MacFirst1.
@@ -717,7 +763,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, use_this_mac])
+        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, use_this_mac, open_help, notification_settings, sign_out])
         .setup(|a| {
             let dir = a.path().app_config_dir()?;
             std::fs::create_dir_all(&dir)?;
