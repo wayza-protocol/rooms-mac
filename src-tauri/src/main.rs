@@ -107,6 +107,22 @@ fn init_script(app: &App) -> String {
     )
 }
 
+// What the app did, one line each, in ~/Library/Logs/Wayza/wayza.log: no message text, no keys. For finding out why
+// Claude didn't answer (Graham's first run, 1 Nov 2026). Kept under about 1 MB.
+fn log(line: &str) {
+    use std::io::Write;
+    let dir = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Library/Logs/Wayza");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("wayza.log");
+    if std::fs::metadata(&path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+        let _ = std::fs::rename(&path, dir.join("wayza.old.log"));
+    }
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{t} {line}");
+    }
+}
+
 fn window(h: &AppHandle) -> Option<WebviewWindow> {
     h.get_webview_window("main")
 }
@@ -251,12 +267,16 @@ async fn live(h: AppHandle) {
             continue;
         };
         match listen(&h, &app, &session).await {
-            Ok(()) => wait = 2,
+            Ok(()) => {
+                log("account socket closed");
+                wait = 2
+            }
             Err(e) if e.downcast_ref::<Unauthorized>().is_some() => {
+                log("account socket: signed out");
                 signed_out(&h);
                 continue;
             }
-            Err(_) => {}
+            Err(e) => log(&format!("account socket failed: {e}")),
         }
         tokio::time::sleep(Duration::from_secs(wait)).await;
         wait = (wait * 2).min(60);
@@ -266,6 +286,7 @@ async fn live(h: AppHandle) {
 async fn listen(h: &AppHandle, app: &Shared, session: &str) -> Result<()> {
     let t = app.api.post("/me/live-ticket", Some(session), json!({})).await?;
     let (mut ws, _) = tokio_tungstenite::connect_async(t["url"].as_str().ok_or_else(|| anyhow!("no url"))?).await?;
+    log("account socket open");
     badge(h, app).await;
     while let Some(msg) = ws.next().await {
         let msg = msg?;
@@ -296,10 +317,15 @@ async fn on_event(h: &AppHandle, app: &Shared, ev: Value) {
         let s = app.saved.lock().unwrap();
         (s.me.clone().unwrap_or_default(), s.ai.clone().unwrap_or_default())
     };
+    if matches!(ev["type"].as_str(), Some("wanted") | Some("side")) {
+        log(&format!("{} in {room}: asks {} {}; this app's AI is {}", ev["type"].as_str().unwrap_or(""), ev["ais"], ev["ai"], if ai.is_empty() { "none" } else { ai.as_str() }));
+    }
     match ev["type"].as_str() {
         Some("wanted") if !ai.is_empty() && ev["ais"].as_array().map(|a| a.iter().any(|x| x == &json!(ai))).unwrap_or(false) => {
             if this_mac_runs_ai(app).await {
                 answer(h, app, &room, false).await;
+            } else {
+                log("not answering: Claude runs on another Mac");
             }
         }
         Some("side") if !ai.is_empty() && ev["ai"] == json!(ai) => {
@@ -410,7 +436,7 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool) {
             }
             push_state(h);
         }
-        eprintln!("Claude couldn't answer in {room}: {e}");
+        log(&format!("Claude couldn't answer in {room}: {e}"));
     }
 }
 
