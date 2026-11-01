@@ -158,6 +158,9 @@ fn init_script(app: &App) -> String {
     format!(
         r#"(function(){{
   if (location.origin !== {origin}) return;
+  // The account pages wear the app's header here, not the website's (AppAcct1): see site-chrome.js IN_MAC.
+  var mark = function () {{ var d = document.documentElement; if (d) d.classList.add('in-mac'); return !!d; }};
+  if (!mark()) {{ var o = new MutationObserver(function () {{ if (mark()) o.disconnect(); }}); o.observe(document, {{ childList: true }}); }}
   window.wayzaMac = {st};
   window.__wayzaMacSet = function (s) {{ window.wayzaMac = s; document.dispatchEvent(new CustomEvent('wayza-mac')); }};
   var inv = function (c, a) {{ try {{ return window.__TAURI_INTERNALS__.invoke(c, a || {{}}); }} catch (e) {{}} }};
@@ -453,6 +456,11 @@ fn open_passport(h: AppHandle, address: String) {
     if let Some(u) = passport_url(&address) {
         let _ = h.opener().open_url(u, None::<&str>);
     }
+}
+
+// The wayza.com pages the app window shows: Rooms (and the invite links into them), records, and your account.
+fn in_window(path: &str) -> bool {
+    path == "/account" || ["/account/", "/rooms/", "/records/"].iter().any(|p| path.starts_with(p))
 }
 
 fn passport_url(address: &str) -> Option<String> {
@@ -1037,6 +1045,12 @@ fn main() {
                         });
                         return false;
                     }
+                    // The window is for Rooms and your account. Any other wayza.com page (the home page, Docs, the
+                    // Commons) opens in the browser, so the website never takes the place of the room.
+                    if u.scheme() != "tauri" && !in_window(u.path()) {
+                        let _ = h.opener().open_url(u.as_str(), None::<&str>);
+                        return false;
+                    }
                     true
                 })
                 .build()?;
@@ -1057,6 +1071,16 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_rooms_and_account_stay_in_the_window() {
+        for p in ["/account", "/account/reach", "/account/rooms/room_1", "/rooms/join/abc", "/records/x"] {
+            assert!(in_window(p), "{p}");
+        }
+        for p in ["/", "/docs/", "/developers/", "/live", "/help/", "/passport/maya", "/accounts", "/roomsx"] {
+            assert!(!in_window(p), "{p}");
+        }
+    }
 
     #[test]
     fn passport_url_stays_on_wayza() {
