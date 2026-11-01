@@ -1,0 +1,14 @@
+{
+  "name": "wayza-rooms-mac",
+  "private": true,
+  "version": "0.1.0",
+  "description": "The Wayza app for Mac: your rooms, with your own Claude running on your Mac.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.1.0"
+  }
+}
