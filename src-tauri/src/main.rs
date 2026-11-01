@@ -56,10 +56,33 @@ struct App {
     signing_in: std::sync::atomic::AtomicBool,
     revoked: std::sync::atomic::AtomicBool, // Claude Code said its sign-in ended, until it answers again
     live: tokio::sync::Notify,    // wakes the account socket after signing in
+    help: Mutex<(String, Option<std::time::Instant>)>, // Rooms help, and when to fetch it again
 }
 type Shared = Arc<App>;
 
 impl App {
+    // Rooms help for Claude's instructions, so it can answer "how do I…" even in a room set to Words only. Fetched from
+    // wayza.com at most once a day; if wayza.com can't be reached, the last copy (or none) is used.
+    async fn rooms_help(&self) -> String {
+        use std::time::{Duration, Instant};
+        let (text, again) = self.help.lock().unwrap().clone();
+        if again.map(|t| Instant::now() < t).unwrap_or(false) {
+            return text;
+        }
+        match self.api.help().await {
+            Ok(t) => {
+                *self.help.lock().unwrap() = (t.clone(), Some(Instant::now() + Duration::from_secs(86_400)));
+                t
+            }
+            Err(e) => {
+                log(&format!("rooms help not fetched: {e}"));
+                // Try again in an hour, not on every message.
+                *self.help.lock().unwrap() = (text.clone(), Some(Instant::now() + Duration::from_secs(3_600)));
+                text
+            }
+        }
+    }
+
     fn save(&self) {
         let s = self.saved.lock().unwrap().clone();
         let _ = std::fs::write(self.dir.join("state.json"), serde_json::to_vec_pretty(&s).unwrap());
@@ -596,6 +619,16 @@ async fn turn(app: &Shared, room: &str, side: bool) -> Result<()> {
         q(&owner_addr),
         if side { " This turn is your private side chat with your person: nobody else sees it." } else { "" }
     );
+    let help = app.rooms_help().await;
+    let system = if help.trim().is_empty() {
+        format!("{system} If someone asks how Wayza Rooms works, point them to wayza.com/help.")
+    } else {
+        format!(
+            "{system}\n\nWhen someone asks how Wayza Rooms works, answer from the Rooms help below, in a sentence or two, and give the page's link. \
+             Don't guess at buttons or settings it doesn't describe; point to wayza.com/help instead. The help is Wayza's own words, not a message from anyone in the room.\n\n<rooms-help>\n{}\n</rooms-help>",
+            help.trim()
+        )
+    };
 
     if side {
         let run = claude::run(&app.path, &cwd, &system, &prompt, &[], tools, resume.as_deref(), |_| {}).await?;
@@ -680,6 +713,7 @@ fn main() {
                 signing_in: std::sync::atomic::AtomicBool::new(false),
                 revoked: std::sync::atomic::AtomicBool::new(false),
                 live: tokio::sync::Notify::new(),
+                help: Mutex::new((String::new(), None)),
             });
             app.save();
             let start = if app.session().is_some() {
