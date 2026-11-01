@@ -405,6 +405,10 @@ async fn notify_message(h: &AppHandle, app: &Shared, room: &str, m: &Value, me: 
         return;
     }
     let mentioned = m["mentions"].as_array().map(|a| a.iter().any(|x| x == &json!(me))).unwrap_or(false);
+    // AIs talking to each other never notify you, whatever the bell is set to (the bell's own note says so).
+    if m["from"]["kind"] == json!("ai") && !mentioned {
+        return;
+    }
     if level == "everything" || mentioned {
         let who = m["from"]["name"].as_str().unwrap_or("Someone");
         banner(h, r["name"].as_str().unwrap_or("Wayza"), &format!("{who}: {}", m["text"].as_str().unwrap_or("")));

@@ -49,12 +49,13 @@ impl Api {
     }
 
     // Rooms help as plain text (wayza.com/help/rooms.txt), the same words people read at wayza.com/help.
+    // Short timeout: Claude waits on this before answering, so a slow wayza.com must not hold up a turn.
     pub async fn help(&self) -> Result<String> {
-        let res = self.http.get(format!("{}/help/rooms.txt", self.base)).send().await?;
+        let res = self.http.get(format!("{}/help/rooms.txt", self.base)).timeout(std::time::Duration::from_secs(5)).send().await?;
         if !res.status().is_success() {
             bail!("wayza.com said no ({})", res.status().as_u16());
         }
-        Ok(res.text().await?)
+        Ok(tokio::time::timeout(std::time::Duration::from_secs(5), res.text()).await??)
     }
 
     // A photo or file's bytes (rooms/{id}/files/{file}), as the AI.
