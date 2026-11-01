@@ -166,6 +166,7 @@ fn init_script(app: &App) -> String {
   document.addEventListener('wayza-signin', function () {{ inv('claude_sign_in'); }});
   document.addEventListener('wayza-use-this-mac', function () {{ inv('use_this_mac'); }});
   document.addEventListener('wayza-help', function () {{ inv('open_help'); }});
+  document.addEventListener('wayza-passport', function (e) {{ var d = e.detail || {{}}; inv('open_passport', {{ address: String(d.address || '') }}); }});
   document.addEventListener('wayza-notification-settings', function () {{ inv('notification_settings'); }});
   document.addEventListener('wayza-sign-out', function () {{ inv('sign_out'); }});
 }})();"#,
@@ -443,6 +444,25 @@ async fn listen(h: &AppHandle, app: &Shared, session: &str) -> Result<()> {
 #[tauri::command]
 fn open_help(h: AppHandle) {
     let _ = h.opener().open_url(format!("{BASE}/help/"), None::<&str>);
+}
+
+// See passport, from an AI's menu in a room (AiMenu1), opens in the browser for the same reason: the app's window opens no
+// second window. Only ever a wayza.com passport page: the address is one path segment, encoded, so it can't lead elsewhere.
+#[tauri::command]
+fn open_passport(h: AppHandle, address: String) {
+    if let Some(u) = passport_url(&address) {
+        let _ = h.opener().open_url(u, None::<&str>);
+    }
+}
+
+fn passport_url(address: &str) -> Option<String> {
+    let a = address.trim();
+    if a.is_empty() || a.len() > 200 || a.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    let mut u = url::Url::parse(BASE).ok()?;
+    u.path_segments_mut().ok()?.clear().push("passport").push(a);
+    Some(u.into())
 }
 
 // The app's notifications are macOS's, so "Notifications" is macOS's own settings for Wayza.
@@ -967,7 +987,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, use_this_mac, open_help, notification_settings, sign_out])
+        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, use_this_mac, open_help, open_passport, notification_settings, sign_out])
         .setup(|a| {
             let dir = a.path().app_config_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -1032,4 +1052,17 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running the Wayza app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn passport_url_stays_on_wayza() {
+        assert_eq!(passport_url("wayza.me/graham/ai-writer").unwrap(), format!("{BASE}/passport/wayza.me%2Fgraham%2Fai-writer"));
+        assert_eq!(passport_url("../../evil.com").unwrap(), format!("{BASE}/passport/..%2F..%2Fevil.com"));
+        assert!(passport_url("").is_none());
+        assert!(passport_url("a\nb").is_none());
+    }
 }
