@@ -319,6 +319,30 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
     Ok(())
 }
 
+// A new key for one of the other Claudes this app runs. When wayza.com says it isn't yours any more, the app stops
+// running it.
+async fn rekey(app: &Shared, ai: &str) -> bool {
+    if app.saved.lock().unwrap().ai.as_deref() == Some(ai) || !app.held().iter().any(|a| a == ai) {
+        return false;
+    }
+    let Some(session) = app.session() else { return false };
+    match app.api.post("/mac/ais", Some(&session), json!({ "address": ai })).await {
+        Ok(t) => {
+            log(&format!("{ai} had a new key somewhere else; got one again"));
+            hold_more(app, &t).is_ok()
+        }
+        Err(e) => {
+            if e.to_string().ends_with("(403)") {
+                app.saved.lock().unwrap().more.retain(|a| a != ai);
+                auth::forget(&format!("ai:{ai}"));
+                app.save();
+            }
+            log(&format!("Couldn't get {ai} a key again: {e}"));
+            false
+        }
+    }
+}
+
 // Another Claude's key, from wayza.com's answer, into the Keychain; the app runs it from now on.
 fn hold_more(app: &Shared, t: &Value) -> Result<Option<String>> {
     let (Some(addr), Some(key)) = (t["address"].as_str(), t["key"].as_str()) else { return Err(anyhow!("no key")) };
@@ -591,6 +615,11 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
         b.insert(key.clone(), false);
     }
     let mut r = turn(app, room, side, ai).await;
+    // Another Claude whose key no longer works (another computer, or anything else holding that key, got a new one):
+    // the app asks for a key again with your session, and tries once more, as the first Claude does through its yes.
+    if r.as_ref().err().map(|e| e.downcast_ref::<Unauthorized>().is_some()).unwrap_or(false) && rekey(app, ai).await {
+        r = turn(app, room, side, ai).await;
+    }
     loop {
         let again = {
             let mut b = app.busy.lock().unwrap();
