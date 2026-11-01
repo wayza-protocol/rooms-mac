@@ -558,7 +558,8 @@ async fn on_event(h: &AppHandle, app: &Shared, ev: Value) {
             }
             badge(h, app).await;
         }
-        Some("member") | Some("left") | Some("room") => badge(h, app).await,
+        // "read": you read a room, on this Mac or anywhere else, so the Dock drops it at once.
+        Some("member") | Some("left") | Some("room") | Some("read") => badge(h, app).await,
         _ => {}
     }
 }
