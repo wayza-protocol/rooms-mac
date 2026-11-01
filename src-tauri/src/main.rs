@@ -358,7 +358,7 @@ fn notification_settings(h: AppHandle) {
 }
 
 // Signing out from the menu: the page has already ended the window's session on wayza.com. The app first tells
-// wayza.com your Claude is signed out on this Mac (so rooms show it, NoticeB3, instead of "Claude is on" with nobody
+// wayza.com your Claude is signed out, if this Mac is the one running it (so rooms show it, NoticeB3, instead of "Claude is on" with nobody
 // answering) and ends its own session there too. Then it forgets both Keychain entries it keeps (the sign-in and your
 // Claude's key), who you are, your Claude and each room's Claude conversation, so whoever uses this Mac next can't act
 // as you or as your Claude. Then MacFirst1. If wayza.com can't be reached, it still forgets everything here.
@@ -366,7 +366,11 @@ fn notification_settings(h: AppHandle) {
 async fn sign_out(h: AppHandle) {
     let app = h.state::<Shared>().inner().clone();
     if let Some(session) = app.session() {
-        let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "signed_out": ["claude"] })).await;
+        // Only when this Mac is the one running your Claude: the PUT makes its Mac the active one, so from here it
+        // would take your Claude away from your other Mac.
+        if this_mac_runs_ai(&app).await {
+            let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "signed_out": ["claude"] })).await;
+        }
         let _ = app.api.delete("/me/session", &session).await;
     }
     auth::forget("ai:claude");
