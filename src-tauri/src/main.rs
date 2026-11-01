@@ -357,12 +357,18 @@ fn notification_settings(h: AppHandle) {
     let _ = h.opener().open_url(format!("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={id}"), None::<&str>);
 }
 
-// Signing out from the menu: the page has already ended the session on wayza.com. The app forgets both Keychain
-// entries it keeps (the sign-in and your Claude's key), who you are, your Claude and each room's Claude conversation,
-// so whoever uses this Mac next can't act as you or as your Claude. Then MacFirst1.
+// Signing out from the menu: the page has already ended the window's session on wayza.com. The app first tells
+// wayza.com your Claude is signed out on this Mac (so rooms show it, NoticeB3, instead of "Claude is on" with nobody
+// answering) and ends its own session there too. Then it forgets both Keychain entries it keeps (the sign-in and your
+// Claude's key), who you are, your Claude and each room's Claude conversation, so whoever uses this Mac next can't act
+// as you or as your Claude. Then MacFirst1. If wayza.com can't be reached, it still forgets everything here.
 #[tauri::command]
-fn sign_out(h: AppHandle) {
+async fn sign_out(h: AppHandle) {
     let app = h.state::<Shared>().inner().clone();
+    if let Some(session) = app.session() {
+        let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "signed_out": ["claude"] })).await;
+        let _ = app.api.delete("/me/session", &session).await;
+    }
     auth::forget("ai:claude");
     {
         let mut s = app.saved.lock().unwrap();
