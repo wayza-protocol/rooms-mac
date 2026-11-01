@@ -183,7 +183,9 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: 
         if caps.safe_mode && room.is_none() {
             cmd.arg("--safe-mode");
         } else {
-            cmd.args(["--setting-sources", "", "--settings", r#"{"disableAllHooks":true}"#]);
+            // Claude Code's own memory stays off too: a "My computer too" turn could write notes there that a turn
+            // someone else started would then read (build review 1, item 1; tried on 2.1.316).
+            cmd.args(["--setting-sources", "", "--settings", r#"{"disableAllHooks":true,"autoMemoryEnabled":false}"#]);
         }
         cmd.arg("--strict-mcp-config");
         match room {
