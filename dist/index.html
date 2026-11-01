@@ -1,0 +1,452 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Wayza</title><style>@font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:400 700;font-display:swap;src:url(fonts/plus-jakarta-sans-latin.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:400 700;font-display:swap;src:url(fonts/plus-jakarta-sans-latin-ext.woff2) format("woff2");unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+body{margin:0}
+.root *{box-sizing:border-box;margin:0;padding:0}
+.root{width:100%;height:100vh;overflow:hidden;background:#FAFAF9;font-family:"Plus Jakarta Sans",sans-serif;color:#111;-webkit-font-smoothing:antialiased;display:grid;grid-template-columns:300px 1fr 380px}
+.f{background-size:cover;background-position:center;border-radius:50%;display:block}
+/* sidebar */
+.side{border-right:1px solid #EAEAEA;display:flex;flex-direction:column;background:#FAFAF9;min-height:0}
+.stop{display:flex;justify-content:space-between;align-items:center;padding:18px 16px 0 20px}
+.stop h1{font-size:26px;font-weight:700;letter-spacing:-.6px}
+.new{width:36px;height:36px;border-radius:50%;background:#C42E69;display:flex;align-items:center;justify-content:center;border:0}
+.search{margin:14px 14px 8px;height:36px;border-radius:10px;background:#fff;box-shadow:inset 0 0 0 1px #EAEAEA;display:flex;align-items:center;gap:8px;padding:0 12px;color:#6B6B6B;font-size:15px}
+.list{padding:2px 8px}
+.r{display:flex;align-items:center;gap:11px;height:68px;padding:0 10px;border-radius:12px}
+.r.sel{background:#FBE8EF}
+.cl{width:46px;height:46px;position:relative;flex:none}
+.cl .f{position:absolute;border:2px solid #FAFAF9}
+.r.sel .cl .f{border-color:#FBE8EF}
+.c1 .f{width:46px;height:46px;left:0;top:0;border:0}
+.c2 .f:nth-child(1){width:33px;height:33px;left:0;top:0}.c2 .f:nth-child(2){width:33px;height:33px;left:13px;top:13px}
+.c3 .f:nth-child(1){width:30px;height:30px;left:8px;top:0}.c3 .f:nth-child(2){width:25px;height:25px;left:0;top:21px}.c3 .f:nth-child(3){width:25px;height:25px;left:21px;top:21px}
+.aiav{width:46px;height:46px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;justify-content:center;flex:none}
+.rb{flex:1;min-width:0}
+.rl1{display:flex;justify-content:space-between;align-items:baseline;gap:6px}
+.rn{font-size:15.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rt{font-size:14px;color:#6B6B6B;flex:none}
+.rp{font-size:14px;color:#6B6B6B;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.r.sel .rp{color:#111}
+.dots{display:inline-flex;gap:3px;margin-right:6px;vertical-align:middle}.dots i{width:4px;height:4px;border-radius:50%;background:#6B6B6B;display:block}
+.tag{font-size:14px;font-weight:500;color:#6B6B6B;margin-left:5px}
+.noowner{font-size:14px;font-weight:600;color:#111;box-shadow:inset 0 0 0 1.5px #EAEAEA;border-radius:7px;padding:0 6px;line-height:22px;margin-left:6px;background:#fff;white-space:nowrap}
+.me{margin-top:auto;display:flex;align-items:center;gap:10px;padding:14px 18px;border-top:1px solid #EAEAEA;font-size:14.5px}
+.me .f{width:30px;height:30px}
+.me span{color:#6B6B6B;margin-left:auto;font-size:14px}
+/* room */
+.room{display:flex;flex-direction:column;min-width:0;background:#FAFAF9;min-height:0}
+.rh{height:72px;border-bottom:1px solid #EAEAEA;display:flex;align-items:center;gap:14px;padding:0 24px;flex:none}
+.pile{display:flex}.pile .f,.pile .ai{width:34px;height:34px;border:2px solid #FAFAF9}.pile>*+*{margin-left:-10px}
+.pile .ai{border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;justify-content:center}
+.rh h2{font-size:19px;font-weight:700;letter-spacing:-.3px}
+.rh .sub{font-size:14px;color:#6B6B6B;margin-top:1px}
+.rh .act{margin-left:auto;display:flex;gap:8px}
+.pill{height:34px;border-radius:17px;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;gap:7px;padding:0 13px;font-size:14px;font-weight:600;color:#111;border:0;font-family:inherit}
+.feed{flex:1;padding:14px 28px 0}
+.day{text-align:center;font-size:14px;color:#6B6B6B;margin:2px 0 8px}
+.who{font-size:14px;color:#6B6B6B;margin:12px 0 3px 46px}
+.who b{color:#111;font-weight:600}
+.row{display:flex;align-items:flex-end;gap:10px}
+.row.mine{justify-content:flex-end;margin-top:10px}
+.av{width:36px;height:36px;flex:none;position:relative}
+.av.ai{border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;justify-content:center}
+.av .ow{position:absolute;right:-3px;bottom:-3px;width:16px;height:16px;border:2px solid #FAFAF9}
+.b{max-width:520px;padding:9px 14px;border-radius:19px;font-size:15.5px;line-height:1.38}
+.mine .b{background:#C42E69;color:#fff}
+.person .b{background:#CFEAEA}
+.aib .b{background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA}
+.at{font-weight:600}
+.made{margin:6px 0 0 46px;display:inline-flex;align-items:center;gap:10px;background:#fff;box-shadow:inset 0 0 0 1px #EAEAEA;border-radius:14px;padding:9px 14px 9px 10px;font-size:14px}
+.made .ic{width:30px;height:30px;border-radius:8px;background:#FBE8EF;display:flex;align-items:center;justify-content:center}
+.made b{font-weight:600}.made span{color:#6B6B6B}
+.pause{display:flex;align-items:center;gap:12px;margin:16px 0 0;font-size:14px;color:#6B6B6B}
+.pause:before,.pause:after{content:"";flex:1;height:1px;background:#EAEAEA}
+.pause b{color:#111;font-weight:600}
+.sys.j{font-size:13.5px;margin:8px 0 0}
+/* knock */
+.knock{margin:16px auto 0;width:540px;background:#fff;border-radius:18px;box-shadow:0 0 0 1px #EAEAEA,0 6px 18px rgba(17,17,17,.05);padding:16px 18px}
+.kh{display:flex;gap:12px;align-items:center}
+.kt{font-size:16px;font-weight:600}
+.kd{font-size:14.5px;line-height:1.42;margin-top:10px}
+.km{font-size:14px;color:#6B6B6B;margin-top:6px}
+.kb{display:flex;gap:8px;margin-top:14px;align-items:center}
+.btn1{height:38px;border-radius:12px;background:#C42E69;color:#fff;font-weight:600;font-size:15px;padding:0 18px;border:0;font-family:inherit}
+.btn2{height:38px;border-radius:12px;background:#fff;color:#111;font-weight:600;font-size:15px;padding:0 16px;border:0;box-shadow:inset 0 0 0 1.5px #EAEAEA;font-family:inherit}
+.kb .note{margin-left:auto;font-size:14px;color:#6B6B6B}
+.comp{padding:12px 24px 20px;display:flex;gap:10px;align-items:center;flex:none}
+.plus{width:38px;height:38px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1px #EAEAEA;display:flex;align-items:center;justify-content:center;border:0}
+.field{flex:1;height:42px;box-shadow:inset 0 0 0 1px #EAEAEA;background:#fff;border-radius:21px;padding:0 16px;display:flex;align-items:center;color:#6B6B6B;font-size:15.5px}
+/* page panel */
+.panel{border-left:1px solid #EAEAEA;background:#fff;display:flex;flex-direction:column;min-height:0}
+.ph{height:72px;border-bottom:1px solid #EAEAEA;display:flex;align-items:center;gap:10px;padding:0 20px;flex:none}
+.ph h3{font-size:16px;font-weight:700}
+.ph .live{margin-left:auto;font-size:14px;color:#6B6B6B;display:flex;align-items:center;gap:6px}
+.ph .live i{width:8px;height:8px;border-radius:50%;background:#0E8C8C;display:block}
+.doc{padding:22px 24px 0}
+.doc .url{font-size:14px;color:#6B6B6B}
+.doc h4{font-size:30px;line-height:1.05;letter-spacing:-.8px;color:#A0204F;font-weight:700;margin-top:12px}
+.doc .lede{font-size:15px;color:#6B6B6B;margin-top:6px}
+.feat{margin-top:16px;display:flex;flex-direction:column;gap:9px}
+.feat div{font-size:14.5px;line-height:1.35;padding-left:14px;position:relative}
+.feat div:before{content:"";position:absolute;left:0;top:8px;width:5px;height:5px;border-radius:50%;background:#111}
+.banner{margin-top:16px;border-radius:12px;box-shadow:inset 0 0 0 1px #EAEAEA;padding:12px 14px;font-size:14px}
+.banner b{font-weight:600}
+.whodid{margin-top:auto;border-top:1px solid #EAEAEA;padding:16px 20px 20px;flex:none}
+.whodid h5{font-size:14px;font-weight:700;margin-bottom:10px}
+.wd{display:flex;align-items:center;gap:10px;font-size:14px;padding:5px 0}
+.wd .mk{width:26px;height:26px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;justify-content:center;flex:none}
+.wd span{color:#6B6B6B}
+.wait{margin-top:10px;background:#FBE8EF;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.35}
+.wait b{font-weight:600}
+.root{position:relative}
+.r.un .rn{font-weight:700}.r.un .rp{color:#111}.r.un .rt{color:#A0204F;font-weight:600}
+.ud{width:10px;height:10px;border-radius:50%;background:#C42E69;flex:none;margin-left:6px}
+.sec{display:flex;align-items:center;justify-content:space-between;font-size:14px;font-weight:600;color:#6B6B6B;padding:14px 12px 6px}.sec .c{color:#A0204F}
+.hold{display:flex;align-items:center;gap:8px;width:fit-content;font-size:14.5px;color:#111;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;border-radius:12px;padding:8px 12px}
+.hold svg{flex:none}.hold b{color:#A0204F;font-weight:600}.b.pend{opacity:.6}
+.live.idle i{display:none}
+/* AiPanel1, AiPanel2, MuteMe1, BellMuted1, HeaderPills1 */
+.pn .pown{font-size:14px;font-weight:500;color:#6B6B6B;margin-left:8px;letter-spacing:0}
+.mut{display:flex;align-items:center;gap:6px;margin:12px 0 0 46px;font-size:14px;color:#6B6B6B}.mut b{color:#111;font-weight:600}
+.mut button{border:0;background:none;padding:0;margin-left:6px;font:inherit;font-weight:600;color:#A0204F;cursor:pointer}
+.mnote{font-size:14px;color:#6B6B6B;line-height:1.4;margin-top:16px;padding-top:14px;border-top:1px solid #EAEAEA}
+.setb.ownb{padding:0;margin-top:2px}
+.rtm{display:flex;align-items:center;gap:5px}
+.also{display:flex;align-items:center;gap:10px;font-size:14.5px;margin-top:12px}.also .mk{width:28px;height:28px;border-radius:50%;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:grid;place-items:center;background:#fff;flex:none}
+.also .btn2{margin-left:auto;height:34px;font-size:14px;white-space:nowrap;flex:none}
+.hold.out+.row.mine{margin-top:14px}
+.hold.out{margin:8px 0 0 auto}.hold.in{margin:8px 0 0 46px}.hold b.nm{color:#111}.hold .again{border:0;background:none;padding:0;font:inherit;font-weight:600;color:#A0204F;cursor:pointer}
+.ink{font-family:"Plus Jakarta Sans",sans-serif;background:#262626;color:#fff;display:flex;align-items:center;gap:12px;padding:0 20px;height:56px;font-size:15px}
+.ink b{font-weight:600}.ink span.q{color:#C8C8C8}
+.ink .ib{margin-left:auto;height:36px;border-radius:10px;background:#fff;color:#111;font-weight:600;font-size:14.5px;padding:0 16px;border:0;font-family:inherit}
+.ink .ix{width:32px;height:32px;margin-left:4px;border:0;background:none;border-radius:8px;display:grid;place-items:center;cursor:pointer}.ink .ib{cursor:pointer}
+.root.inked{height:calc(100vh - 56px)}.ink *{box-sizing:border-box;margin:0}.ink>svg{flex:none}
+.btn1.pr{background:#A0204F}
+.sys{text-align:center;font-size:14px;color:#6B6B6B;margin:14px 0 4px}.sys b{color:#111;font-weight:600}
+.typing{display:flex;gap:4px;padding:14px 16px !important}.typing i{width:7px;height:7px;border-radius:50%;background:#6B6B6B;display:block;opacity:.5}.typing i:nth-child(2){opacity:.75}.typing i:nth-child(3){opacity:1}
+.mt{font-size:14px;color:#6B6B6B;white-space:nowrap;flex:none}
+/* the Invite dialog (DeskRoom5b) */
+.dimw{position:absolute;inset:0;background:rgba(17,17,17,.28)}
+.modal{position:absolute;left:50%;top:84px;transform:translateX(-50%);width:560px;background:#FAFAF9;border-radius:22px;box-shadow:0 20px 60px rgba(17,17,17,.18);padding:22px 24px 24px}
+.mh{display:flex;align-items:center}.mh h2{font-size:21px;font-weight:700;letter-spacing:-.3px}.mh .x{margin-left:auto;font-size:22px}
+.msub{font-size:14.5px;color:#6B6B6B;margin-top:4px}
+.mlab{font-size:14px;font-weight:700;margin:18px 0 8px}
+.inp{height:44px;border-radius:12px;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;padding:0 14px;font-size:15px;gap:8px}
+.inp .ph2{color:#6B6B6B}
+.note2{font-size:14px;color:#6B6B6B;margin-top:8px;line-height:1.4}
+.linkrow{display:flex;gap:8px}
+.linkrow .inp{flex:1}
+.opts{display:flex;justify-content:space-between;font-size:14px;margin-top:10px}.opts span{color:#6B6B6B}
+.mfoot{display:flex;gap:10px;margin-top:20px;justify-content:flex-end}
+/* an invite link in the browser (MacInvite1) */
+.web{display:grid;grid-template-columns:1fr 460px;height:100vh}
+.web .room{border-right:1px solid #EAEAEA}
+.web .feed{position:relative}
+.web .feed:after{content:"";position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(rgba(250,250,249,0),#FAFAF9)}
+.join{background:#fff;display:flex;flex-direction:column;justify-content:center;padding:0 56px}
+.inv{display:flex;margin-bottom:18px}.inv .f,.inv .ai{width:60px;height:60px;border:3px solid #fff}.inv>*+*{margin-left:-14px}
+.inv .ai{border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;justify-content:center}
+.join h1{font-size:28px;font-weight:700;letter-spacing:-.6px;line-height:1.15}
+.join .who2{font-size:15px;color:#6B6B6B;margin-top:8px}
+.live2{display:flex;align-items:center;gap:7px;font-size:14px;color:#6B6B6B;margin-top:14px}.live2 i{width:8px;height:8px;border-radius:50%;background:#0E8C8C;display:block}
+.sb{height:50px;border-radius:14px;display:flex;align-items:center;justify-content:center;gap:9px;font-weight:600;font-size:16px;width:100%;border:0;font-family:inherit}
+.sb.apple{background:#111;color:#fff;margin-top:30px}.sb.goog{background:#fff;color:#111;box-shadow:inset 0 0 0 1.5px #EAEAEA;margin-top:10px}
+.jn{font-size:14px;color:#6B6B6B;margin-top:14px;line-height:1.45}
+.alt{display:block;margin-top:18px;font-size:15px;font-weight:600;color:#A0204F;text-decoration:none}
+html{color-scheme:light}body{background:#FAFAF9}
+img.f{object-fit:cover}
+a.r{color:inherit;text-decoration:none}
+.list{flex:1;overflow-y:auto;min-height:0}
+.feed{overflow-y:auto;min-height:0;padding-bottom:16px}
+.doc{overflow-y:auto;min-height:0;padding-bottom:16px}
+.web .feed{overflow:hidden}
+.search input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;color:#111;height:100%}
+.search input::placeholder{color:#6B6B6B;opacity:1}
+input.field{border:0;outline:0;font-family:inherit;color:#111}
+input.field::placeholder{color:#6B6B6B;opacity:1}
+.rnf{display:flex;align-items:center}.ktf{display:flex;align-items:center}.whof{display:flex;align-items:center}
+.av.ai.big{width:42px;height:42px}.kh .km{margin-top:2px}
+.row.more{margin-top:10px}
+.b{white-space:pre-wrap;overflow-wrap:anywhere}
+button,a.sb,a.alt,a.pill{cursor:pointer}
+a.sb{text-decoration:none}
+.noowner.after{margin-left:2px}
+.inp input{flex:1;min-width:0;border:0;background:none;outline:0;font:inherit;color:#111}
+.ix2{margin-left:auto;font-size:22px;border:0;background:none;font-family:inherit;color:#111;line-height:1}
+.dimw,.modal{z-index:10}
+.doc textarea{width:100%;min-height:360px;border:0;border-radius:12px;box-shadow:inset 0 0 0 1.5px #EAEAEA;padding:12px 14px;font:inherit;font-size:14.5px;line-height:1.35;color:#111;resize:vertical;outline:0}
+.pedit{display:flex;gap:8px;margin-top:10px}
+.strip{margin:10px 28px 0}
+.hidden{display:none !important}
+/* Editing the page yourself (PageEdit1) */
+.doc.ed{margin:12px 12px 0;padding:12px 14px;border-radius:14px;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA,0 0 0 2px #fff,0 0 0 4px #C42E69}
+.doc.ed [contenteditable]{outline:0;cursor:text}
+.pedit{padding:0 12px;justify-content:flex-end}
+/* Invite link B (agreed 31 Oct): the link gets the dialog's whole width, so it's never cut off; Copy and Share sit under it */
+.lkw{overflow-wrap:anywhere;height:auto;min-height:44px;padding:11px 14px;line-height:1.45}.lkb{display:flex;gap:8px;margin-top:8px}
+/* the board's footer rule .me span{margin-left:auto} also reaches its face, which is a span there (DeskRoom1) */
+.me.on img.f{margin-left:auto}
+.sg .noowner{margin-left:2px}.sg{cursor:pointer}
+/* NoOwner1: the badge at the start of the second line, in the list only */
+.rn2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15.5px;font-weight:600}
+.rp.rpf{display:flex;align-items:center;gap:6px}.noowner.nol{margin:0;flex:none}.rpt{overflow:hidden;text-overflow:ellipsis}
+/* Hover2: the time, react and reply hang from the bubble's lower edge (8px over it), 6px past its outer side. Shown after
+   the pointer rests 120ms (at once for keyboard focus): fade in 150ms ease-out rising 4px; out: fade 100ms, no movement. */
+.row{position:relative}
+.hb{display:none}
+/* The bar floats in the room column, not in the scrolling talk, so the one under the last message is never cut off. The
+   page's script copies a message's own .hb into it and places it against that message's bubble. */
+.room{position:relative}
+#hbar{position:absolute;display:flex;align-items:center;gap:2px;height:38px;padding:0 3px 0 12px;background:#fff;border-radius:12px;box-shadow:0 0 0 1px #EAEAEA,0 4px 12px rgba(17,17,17,.08);z-index:5;white-space:nowrap;
+ opacity:0;visibility:hidden;transform:translateY(4px);transition:opacity .1s linear,visibility 0s linear .1s,transform 0s linear .1s}
+#hbar.on{opacity:1;visibility:visible;transform:none;transition:opacity .15s ease-out,transform .15s ease-out,visibility 0s}
+.ht{font-size:14px;color:#6B6B6B;margin-right:6px}
+.hb:not(:has(button)) .ht,#hbar:not(:has(button)) .ht{margin-right:9px}
+#hbar button{width:32px;height:32px;border-radius:8px;border:0;background:none;display:grid;place-items:center;padding:0}
+#hbar button:hover{background:#F1F1F1}
+.row:focus{outline:0}.row:focus-visible .b{outline:2px solid #C42E69;outline-offset:2px}
+@media (prefers-reduced-motion:reduce){#hbar,#hbar.on{transform:none}}
+.cursor{display:inline-block;width:2px;height:16px;background:#111;vertical-align:-3px;margin-left:2px}
+/* DeskRoom5b: the people and AIs being invited */
+.chipp{display:inline-flex;align-items:center;gap:6px;background:#FBE8EF;border-radius:16px;padding:4px 10px 4px 4px;font-size:14px;font-weight:600}
+.chipp .f{width:24px;height:24px}
+.chipp .m{width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;justify-content:center}
+.sugg{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.sg{display:flex;align-items:center;gap:8px;background:#fff;border-radius:20px;box-shadow:inset 0 0 0 1.5px #EAEAEA;padding:4px 12px 4px 4px;font-size:14px;border:0;font-family:inherit;color:#111}
+.sg.np{padding-left:12px}.sg .f{width:28px;height:28px}
+.inp .chips2{display:flex;gap:8px;flex:none}.inp input.ph2{color:#111}.inp input::placeholder{color:#6B6B6B;opacity:1}
+.aihint{font-size:14px;color:#6B6B6B;margin-top:10px;line-height:1.45;display:none}.aihint code{font-size:14px;color:#111;overflow-wrap:anywhere}
+#ai:target{display:block}
+/* Kit2: hover and keyboard focus */
+.btn2:hover,.pill:hover,.plus:hover,.sb.goog:hover{background:#F1F1F1}
+.btn1:active,.new:active{background:#A0204F}
+a.r:hover{background:#F4F4F3}a.r.sel:hover{background:#FBE8EF}
+a.r:focus-visible{outline:0;box-shadow:inset 0 0 0 2px #C42E69}
+button:focus-visible,a.sb:focus-visible,a.alt:focus-visible{outline:0;box-shadow:0 0 0 2px #fff,0 0 0 4px #C42E69 !important}
+input.field:focus-visible{box-shadow:inset 0 0 0 1px #EAEAEA,0 0 0 2px #fff,0 0 0 4px #C42E69}
+.search:focus-within{box-shadow:inset 0 0 0 1px #EAEAEA,0 0 0 2px #fff,0 0 0 4px #C42E69}
+a.r:active,a.r.sel:active{background:#F1F1F1}
+/* Kit2, Notify3: the list button, shown while the room list is hidden, with the unread count; its name after a moment */
+.tg{position:relative;width:38px;height:38px;border-radius:10px;border:0;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:grid;place-items:center;flex:none;cursor:pointer;font-family:inherit}
+.tg:hover{background:#F1F1F1}
+.tg .bd{position:absolute;top:-7px;right:-9px;min-width:22px;height:22px;border-radius:11px;background:#C42E69;color:#fff;font-size:14px;font-weight:700;display:grid;place-items:center;padding:0 5px;box-shadow:0 0 0 2px #FAFAF9}
+.tg .tip{position:absolute;top:46px;left:0;z-index:10;background:#fff;border-radius:8px;box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 4px 12px rgba(0,0,0,.1);font-size:14px;font-weight:400;padding:5px 10px;white-space:nowrap;color:#111;pointer-events:none;visibility:hidden;opacity:0;transition:opacity .1s ease-out,visibility 0s linear .1s}
+.tg:hover .tip{visibility:visible;opacity:1;transition:opacity .12s ease-out .6s,visibility 0s linear .6s}
+/* Hiding the list or the page slides it away (Graham, 31 Oct: no instant jump). Each bar keeps its own width while its
+   column closes and the talk slides over it, then goes out of reach of the keyboard. */
+.root{transition:grid-template-columns .22s cubic-bezier(.2,0,0,1)}
+.root>.side{width:300px;box-sizing:border-box}.root>.panel{width:380px;box-sizing:border-box}
+.root>.side,.root>.panel{transition:visibility 0s linear 0s}
+.root.nolist{grid-template-columns:0px 1fr 380px}.root.nolist>.side{visibility:hidden;border-right-color:transparent;transition:visibility 0s linear .22s}
+/* WideRoom1, WideRoom2: on a bigger window both bars can be hidden from the header; the page's button sits at the right end */
+.rh .tg.wide{display:none}
+@media (min-width:1441px){.rh .tg.wide{display:grid}}
+.root.nopage{grid-template-columns:300px 1fr 0px}.root.nopage>.panel{visibility:hidden;border-left-color:transparent;transition:visibility 0s linear .22s}.root.nolist.nopage{grid-template-columns:0px 1fr 0px}
+@media (prefers-reduced-motion:reduce){.root,.root>.side,.root>.panel{transition:none}}
+.tg .tip.r{left:auto;right:0}
+/* The room column (SoloRoom1, WideRoom1): the talk sits at the bottom, and on a wide window keeps a readable width */
+.feed{display:flex;flex-direction:column}.feed>:first-child{margin-top:auto}.feed>.made{align-self:flex-start}
+.feed{padding-left:max(28px,calc((100% - 704px)/2));padding-right:max(28px,calc((100% - 704px)/2))}
+.comp{padding-left:max(24px,calc((100% - 712px)/2));padding-right:max(24px,calc((100% - 712px)/2))}
+.solo-sys{text-align:center;font-size:14px;color:#6B6B6B;margin:0 0 6px}
+@media (prefers-reduced-motion:reduce){.tg .tip,.tg:hover .tip{transition:visibility 0s linear .6s}}
+.pv0{display:flex;flex-direction:column;flex:1;min-height:0}
+.pv0 .ph .ix2,.sth .ix2{font-size:20px}
+/* DeskRoom4: room settings */
+.selpill,.selpill:hover{background:#FBE8EF;box-shadow:inset 0 0 0 1.5px #C42E69}
+.sth{height:72px;border-bottom:1px solid #EAEAEA;display:flex;align-items:center;padding:0 20px;flex:none}.sth b{font-size:16px;font-weight:700}
+.setb{padding:4px 20px 20px;overflow-y:auto;min-height:0}
+.setb h5{font-size:14px;font-weight:700;margin:16px 0 8px}
+.setb .hint{font-size:14px;color:#6B6B6B;margin:8px 0 8px;line-height:1.35}
+.mem{display:flex;align-items:center;gap:10px;padding:5px 0;font-size:14.5px}
+.mem .f,.mem .mk{width:28px;height:28px;flex:none}
+.mem .mk{border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;justify-content:center}
+.mem .r2{margin-left:auto;font-size:14px;color:#6B6B6B}
+.seg{display:flex;background:#fff;border-radius:12px;box-shadow:inset 0 0 0 1.5px #EAEAEA;padding:3px;gap:2px}
+.seg button{flex:1;text-align:center;font-size:14px;font-weight:600;padding:7px 4px;border-radius:9px;line-height:1.2;border:0;background:none;font-family:inherit;color:#111}
+.seg button.on{background:#C42E69;color:#fff}.seg button:not(.on):hover{background:#F1F1F1}
+.line{display:flex;justify-content:space-between;align-items:center;font-size:14px;padding:6px 0}.line span{color:#6B6B6B}.line b{font-weight:600}
+.line.ln1{margin-top:6px}
+.step{display:flex;align-items:center;gap:10px;font-weight:600}.step b{color:inherit}
+.step button{width:28px;height:28px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;justify-content:center;font-weight:600;border:0;font-family:inherit;color:inherit;font-size:14px;padding:0}
+.step button:hover{background:#F1F1F1}.step button:disabled{opacity:.4;cursor:default;background:#fff}
+/* DeskRoom2: an AI with no owner, opened from its name or face; links left out; today's messages used */
+.prof{padding:22px 22px 0;overflow-y:auto;min-height:0}
+.pt{display:flex;gap:14px;align-items:center}
+.pt .big{width:60px;height:60px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:flex;align-items:center;justify-content:center;flex:none}
+.pn{font-size:21px;font-weight:700;letter-spacing:-.3px;display:flex;align-items:center}
+.pa{font-size:14px;color:#6B6B6B;margin-top:2px}
+.pd{font-size:14.5px;line-height:1.42;margin-top:14px}
+.facts{margin-top:14px;border-top:1px solid #EAEAEA}
+.fact{display:flex;justify-content:space-between;gap:12px;font-size:14px;padding:9px 0;border-bottom:1px solid #EAEAEA}
+.fact span{color:#6B6B6B}.fact b{font-weight:600;text-align:right}
+.lim h5{font-size:14px;font-weight:700;margin:18px 0 8px}
+.meter{height:6px;border-radius:3px;background:#EAEAEA;overflow:hidden}.meter i{display:block;height:100%;background:#111}
+.meter .w0{width:0%}.meter .w5{width:5%}.meter .w10{width:10%}.meter .w15{width:15%}.meter .w20{width:20%}.meter .w25{width:25%}.meter .w30{width:30%}.meter .w35{width:35%}.meter .w40{width:40%}.meter .w45{width:45%}.meter .w50{width:50%}.meter .w55{width:55%}.meter .w60{width:60%}.meter .w65{width:65%}.meter .w70{width:70%}.meter .w75{width:75%}.meter .w80{width:80%}.meter .w85{width:85%}.meter .w90{width:90%}.meter .w95{width:95%}.meter .w100{width:100%}
+.lmt{display:flex;justify-content:space-between;font-size:14px;color:#6B6B6B;margin-top:6px}
+.can{margin-top:10px;display:flex;flex-direction:column;gap:7px}
+.can div{display:flex;gap:9px;font-size:14px;line-height:1.35;align-items:flex-start}.can svg{flex:none;margin-top:2px}
+.pb{display:flex;gap:8px;padding:16px 22px 20px;margin-top:auto;border-top:1px solid #EAEAEA;flex:none}.pb button{flex:1}
+.cut{display:flex;align-items:center;gap:6px;font-size:14px;color:#6B6B6B;margin:4px 0 0 46px}
+.limit{text-align:center;font-size:14px;color:#6B6B6B;margin:14px 0 0}.limit b{color:#111;font-weight:600}
+.whob{border:0;background:none;padding:0;font:inherit;font-weight:600;color:#111}
+.av.opn{cursor:pointer}
+/* DeskRoom3: private side chat with your own AI */
+.pvh{padding:16px 20px;border-bottom:1px solid #EAEAEA;flex:none}
+.pvh .t{display:flex;align-items:center;gap:10px}.pvh .t b{font-size:16px;font-weight:700}
+.pvh .t .ix2{font-size:20px}
+.pvh p{font-size:14px;color:#6B6B6B;margin-top:6px;line-height:1.4}
+.av.ai.pva{width:30px;height:30px}
+.pf{flex:1;padding:8px 18px 12px;overflow-y:auto;min-height:0}
+.pf .row.mine .b,.pf .aib .b{max-width:300px;font-size:15px}
+.pf .who{margin-left:0}
+.draft{margin:8px 0 0;background:#fff;border-radius:16px;box-shadow:inset 0 0 0 1.5px #EAEAEA;padding:12px 14px}
+.draft .lb{font-size:14px;color:#6B6B6B}
+.draft .tx{font-size:15px;line-height:1.38;margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere}
+.draft .bt{display:flex;gap:8px;margin-top:12px}.draft .bt button{height:36px;font-size:14px;padding:0 12px}
+.kept{display:flex;align-items:center;gap:6px;font-size:14px;color:#6B6B6B;margin:8px 0 0}.kept svg{flex:none}
+.pc{padding:12px 18px 20px;flex:none;display:flex}.pc .field{height:40px;font-size:15px}
+/* NotifyRoom1: the room's bell and what it tells you about */
+.pill.bell{padding:0 10px}.act{position:relative}
+.pill.bell.open{box-shadow:inset 0 0 0 1.5px #EAEAEA,0 0 0 2px #fff,0 0 0 4px #C42E69}
+.pop{position:absolute;top:calc(100% + 13px);right:-4px;width:380px;background:#fff;border-radius:16px;box-shadow:0 0 0 1px #EAEAEA,0 16px 40px rgba(17,17,17,.16);padding:10px;z-index:9;text-align:left}
+.ph2{font-size:14px;color:#6B6B6B;padding:6px 10px 8px;font-weight:600}
+.po{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;background:none;font-family:inherit;color:#111;padding:9px 10px;border-radius:10px}
+.po.on{background:#FBE8EF}.po:not(.on):hover{background:#F4F4F3}.po svg{margin-left:auto;flex:none}
+.pot b{display:block;font-size:15px;font-weight:600}.pot span{display:block;font-size:14px;color:#6B6B6B;margin-top:1px}
+.psep{height:1px;background:#EAEAEA;margin:8px 10px}
+.prow{display:flex;align-items:center;justify-content:space-between;padding:4px 10px;font-size:14px}
+.chips3{display:flex;gap:6px}.chips3 button{height:32px;border-radius:16px;border:0;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;font-family:inherit;font-size:14px;font-weight:600;padding:0 12px;color:#111}
+.chips3 button:hover{background:#F1F1F1}
+.pnote{font-size:14px;color:#6B6B6B;padding:8px 10px 6px;line-height:1.4}
+.rh .pill{white-space:nowrap}.rh>div:not(.pile):not(.act){min-width:0}.rh h2,.rh .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* InRoom1: the left column lists who is here; InRoom2: Rooms opens your rooms over it */
+.side{position:relative}
+.stop.stop2{display:flex;align-items:center;justify-content:space-between;padding:18px 20px 10px}
+#rsww{display:contents}
+.rsw{display:flex;align-items:center;gap:8px;height:38px;padding:0 12px 0 10px;border-radius:10px;border:0;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;font:inherit;font-size:15px;font-weight:600;color:#111;cursor:pointer}
+.rsw:hover,.rsw.on{background:#F1F1F1}
+.bd2{min-width:22px;height:22px;border-radius:11px;background:#C42E69;color:#fff;font-size:14px;font-weight:700;display:grid;place-items:center;padding:0 6px}
+.side2 .sec{font-size:14px;font-weight:600;color:#6B6B6B;padding:12px 20px 6px}.side2 .list .sec{padding-left:12px}.side2 .sec.s2{padding-top:14px}
+#ppl{flex:1;min-height:0;display:flex;flex-direction:column}
+button.r.pr{width:100%;border:0;background:none;font:inherit;color:#111;text-align:left;cursor:pointer}
+button.r.pr:hover{background:#F4F4F3}button.r.pr.sel,button.r.pr.sel:hover{background:#FBE8EF}
+button.r.pr:focus{outline:0}button.r.pr:focus-visible{box-shadow:0 0 0 2px #fff,0 0 0 4px #C42E69}
+.r.pr .pav{width:44px;height:44px;flex:none;display:grid;place-items:center}.r.pr .pav img.f{width:40px;height:40px;border-radius:50%}
+.aiav2{width:40px;height:40px;border-radius:50%;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:grid;place-items:center}
+.swpop{position:absolute;left:14px;top:62px;width:340px;max-height:640px;background:#fff;border-radius:14px;box-shadow:0 0 0 1px #EAEAEA,0 12px 32px rgba(17,17,17,.14);z-index:20;padding:12px 0 8px;overflow:hidden;display:flex;flex-direction:column;animation:rpin .15s ease-out}
+.swpop.hidden{display:none}
+.swpop .search{margin:0 12px 6px;flex:none}.swpop .list{padding:0 6px}
+/* InRoom1: a private chat with another person */
+.pvh2{display:flex;align-items:center;gap:10px;justify-content:flex-start}.pfw{width:32px;height:32px;flex:none;display:block}.pfw img.f{width:32px;height:32px;border-radius:50%;display:block}.pvh2 .ix2{margin-left:auto}
+.dnote{font-size:14px;color:#6B6B6B;padding:0 20px 14px;border-bottom:1px solid #EAEAEA;line-height:1.4;flex:none}
+.pfeed2{flex:1;padding:16px 20px;display:flex;flex-direction:column;overflow-y:auto;min-height:0}.pfeed2 .who{margin-left:0}.pfeed2 .row.person .b{background:#CFEAEA}
+.comp.pcomp{padding:12px 20px 20px}.pcomp input.field:focus-visible{box-shadow:inset 0 0 0 1.5px #EAEAEA,0 0 0 2px #fff,0 0 0 4px #C42E69}.pcomp .field{flex:1;height:44px;border-radius:22px;background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA;padding:0 16px;font-size:15px}
+/* React1: reactions under the bubble, the quick emoji, and what you are replying to */
+.rxs{display:flex;gap:6px;margin:6px 0 0 46px}.rxs.rxr{justify-content:flex-end;margin-left:0}
+.rx{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 10px 0 8px;border-radius:14px;border:0;background:#fff;box-shadow:inset 0 0 0 1px #EAEAEA;font:inherit;font-size:14px;color:#6B6B6B;cursor:pointer}
+.rx:not(.rxme):hover{background:#F1F1F1}
+.rx .e{font-size:15px;line-height:1}
+.rx.rxme{background:#FBE8EF;box-shadow:inset 0 0 0 1.5px #C42E69;color:#A0204F;font-weight:600}
+.rx:focus{outline:0}.rx:focus-visible{outline:2px solid #C42E69;outline-offset:2px}
+#hbar button.on{background:#F1F1F1}
+#rpick{position:absolute;display:flex;gap:2px;padding:4px;background:#fff;border-radius:14px;box-shadow:0 0 0 1px #EAEAEA,0 8px 24px rgba(17,17,17,.12);z-index:6;animation:rpin .15s ease-out}
+#rpick.hidden{display:none}
+#rpick button{width:38px;height:38px;border-radius:10px;border:0;background:none;font-size:20px;line-height:1;display:grid;place-items:center;padding:0;cursor:pointer;font-family:inherit}
+#rpick button:hover,#rpick button:focus{background:#F1F1F1;outline:0}
+@keyframes rpin{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){#rpick,.swpop{animation:none}}
+.rto{display:flex;align-items:center;gap:8px;margin:0 max(24px,calc((100% - 712px)/2));padding:10px 12px 10px 14px;border-radius:12px;background:#F1F1F1;font-size:14px;color:#6B6B6B;flex:none}
+.rto svg{flex:none}.rto span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rto b{color:#111;font-weight:600}
+.rto .ix2{font-size:18px;margin-left:4px}
+/* Under 1280 wide one side shows at a time, and the header's hide and show buttons are there to swap them */
+@media (max-width:1279px){.rh .tg.wide{display:grid}}
+/* Batch 8. The message box holds what you add and the emoji button; its pickers sit 4px above it (Attach1, Emoji1, Mention1) */
+#say{position:relative}
+#say .field{padding-right:48px}
+#atts{position:absolute;left:calc(max(24px,(100% - 712px)/2) + 54px);top:17px;display:flex;gap:8px;max-width:calc(100% - 2*max(24px,(100% - 712px)/2) - 160px);overflow:hidden}
+#atts:empty{display:none}
+.att{display:inline-flex;align-items:center;gap:7px;height:32px;border-radius:16px;background:#FBE8EF;padding:0 8px 0 10px;font-size:14px;font-weight:600;color:#111;white-space:nowrap;flex:none;max-width:260px}
+.att .an{overflow:hidden;text-overflow:ellipsis}
+.att svg{flex:none}
+.att .attx{font-size:17px;color:#6B6B6B;margin-left:2px;border:0;background:none;padding:0;cursor:pointer;font-family:inherit;line-height:1;border-radius:8px}
+.att .attx:hover{color:#111}
+.att.up{opacity:.6}
+.emo{position:absolute;right:calc(max(24px,(100% - 712px)/2) + 6px);top:16px;width:34px;height:34px;border-radius:17px;border:0;background:none;display:grid;place-items:center;padding:0;cursor:pointer}
+.emo:hover,.emo.on{background:#F1F1F1}
+.epick{position:absolute;right:max(24px,(100% - 712px)/2);bottom:calc(100% + 4px);display:grid;grid-template-columns:repeat(8,38px);gap:2px;padding:6px;background:#fff;border-radius:14px;box-shadow:0 0 0 1px #EAEAEA,0 8px 24px rgba(17,17,17,.12);z-index:6;animation:rpin .15s ease-out}
+.epick button{width:38px;height:38px;border-radius:10px;border:0;background:none;font-size:20px;line-height:1;display:grid;place-items:center;padding:0;cursor:pointer;font-family:inherit}
+.epick button:hover,.epick button:focus{background:#F1F1F1;outline:0}
+.mpick{position:absolute;left:calc(max(24px,(100% - 712px)/2) + 48px);bottom:calc(100% + 4px);width:340px;padding:6px;background:#fff;border-radius:14px;box-shadow:0 0 0 1px #EAEAEA,0 8px 24px rgba(17,17,17,.12);z-index:6;animation:rpin .15s ease-out}
+.mo{display:flex;align-items:center;gap:10px;height:44px;padding:0 10px;border-radius:10px;font-size:15px;color:#111;white-space:nowrap;overflow:hidden;cursor:pointer}
+.mo.on{background:#F1F1F1}
+.mav{width:28px;height:28px;border-radius:50%;flex:none;overflow:hidden;display:grid;place-items:center}
+.mav img{width:28px;height:28px;object-fit:cover;display:block}
+.mav.ai{background:#fff;box-shadow:inset 0 0 0 1.5px #EAEAEA}.mav.ai svg{width:15px;height:15px}
+.mn{font-weight:600}.ms{color:#6B6B6B;font-size:14px;overflow:hidden;text-overflow:ellipsis}
+@media (prefers-reduced-motion:reduce){.epick,.mpick{animation:none}}
+/* NoMatch1: Rooms search with nothing found */
+.nomatch{padding:10px 12px 12px;font-size:15px;color:#6B6B6B}
+#find::-webkit-search-cancel-button{-webkit-appearance:none;display:none}
+/* DmUnread1: a private message you haven't read, like an unread room */
+#ppl .r.un .rn{font-weight:700}#ppl .r.un .rp{color:#111}#ppl .rl1 .ud{margin-left:auto}
+/* AttachSent1: a photo with no bubble, a file as a card in the writer's bubble colours */
+.pic{display:block}.pic img{display:block;width:280px;height:186px;object-fit:cover;border-radius:19px}
+.b.file{display:flex;align-items:center;gap:10px;padding:8px 16px 8px 8px;text-decoration:none;color:#111}.row.mine .b.file{color:#fff}
+.fi{width:38px;height:38px;flex:none;border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center}
+.fn{display:flex;flex-direction:column;line-height:1.3;min-width:0}
+.fn b{font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fn span{font-size:14px;color:#4A4A4A}
+.row.mine .fn span{color:#fff}
+/* Motion1: panels slide in 16px from the right and fade in over 200ms, and leave the same way over 150ms. Menus and
+   pickers rise 4px and fade in over 150ms, and fade out over 100ms. Under 1280 wide the people list slides left and fades
+   as a panel opens. Nothing moves when the computer asks for less motion. */
+@keyframes pslin{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+@keyframes pslout{from{opacity:1;transform:none}to{opacity:0;transform:translateX(16px)}}
+@keyframes rpout{from{opacity:1}to{opacity:0}}
+.pin{animation:pslin .2s cubic-bezier(.2,0,0,1)}
+.pout{animation:pslout .15s ease-in forwards;pointer-events:none;background:#fff}
+.mout{animation:rpout .1s ease-in forwards !important;pointer-events:none}
+.pop{animation:rpin .15s ease-out}
+@media (max-width:1279px){.root>.side{transition:opacity .2s cubic-bezier(.2,0,0,1),transform .2s cubic-bezier(.2,0,0,1),visibility 0s linear 0s}.root.nolist>.side{opacity:0;transform:translateX(-16px);transition:opacity .2s cubic-bezier(.2,0,0,1),transform .2s cubic-bezier(.2,0,0,1),visibility 0s linear .22s}}
+@media (prefers-reduced-motion:reduce){.pin,.pout,.mout,.pop{animation:none !important}.root>.side{transition:none !important}}
+.root{position:relative;width:1440px;height:900px;overflow:hidden}
+.hidden{display:none !important}
+.root.solo{display:block;background:#FAFAF9}
+.lights{position:absolute;left:18px;top:18px;display:flex;gap:8px;z-index:3}.lights i{width:12px;height:12px;border-radius:50%;background:#DADADA;display:block}
+.first{position:absolute;left:50%;top:50%;transform:translate(-50%,-54%);width:440px;text-align:center}
+.first h1{font-size:30px;font-weight:700;letter-spacing:-.6px;margin-top:22px}
+.first p{font-size:16px;color:#6B6B6B;margin-top:8px;line-height:1.45}
+.first .btn1{margin-top:26px}
+.first .fine{font-size:14px;color:#6B6B6B;margin-top:16px;line-height:1.45}
+.cs{position:absolute;left:50%;top:50%;transform:translate(-50%,-52%);width:560px;background:#fff;border-radius:22px;box-shadow:0 0 0 1px #EAEAEA,0 10px 30px rgba(17,17,17,.06);padding:30px 32px 26px}
+.cs .top{display:flex;align-items:center;gap:12px}
+.cs .mk{width:48px;height:48px;border-radius:50%;box-shadow:inset 0 0 0 1.5px #EAEAEA;display:grid;place-items:center;background:#fff}
+.cs .plus2{font-size:20px;color:#6B6B6B}
+.cs h1{font-size:24px;font-weight:700;letter-spacing:-.4px;margin-top:20px}
+.cs .lead{font-size:15.5px;color:#111;margin-top:6px;line-height:1.45}
+.cs ul{list-style:none;margin:18px 0 0;display:flex;flex-direction:column;gap:12px}
+.cs li{font-size:15px;line-height:1.45;padding-left:18px;position:relative}
+.cs li:before{content:"";position:absolute;left:2px;top:9px;width:6px;height:6px;border-radius:50%;background:#111}
+.cs .acts2{display:flex;gap:10px;margin-top:24px}
+.cs .who2{font-size:14px;color:#6B6B6B;margin-top:16px}
+.wz{position:absolute;left:28px;top:22px;font-size:20px;font-weight:700;letter-spacing:-.4px;color:#111}
+.wz span{font-size:14px;font-weight:500;color:#6B6B6B;margin-left:10px;letter-spacing:0}
+.desk2{display:block;background:#E7E7E4}
+.win{position:absolute;left:58px;top:24px;width:1440px;height:900px;transform:scale(.82);transform-origin:0 0;border-radius:14px;overflow:hidden;box-shadow:0 0 0 1px rgba(0,0,0,.12),0 24px 60px rgba(0,0,0,.18)}
+.ban{position:absolute;top:16px;right:16px;width:372px;background:#F3F3F3;border-radius:18px;box-shadow:0 0 0 .5px rgba(0,0,0,.12),0 10px 30px rgba(0,0,0,.16);padding:12px 14px;display:flex;gap:11px;align-items:flex-start;z-index:5}
+.ban .nb{flex:1;min-width:0}.ban .l1{display:flex;font-size:14px;font-weight:700}.ban .l1 span{margin-left:auto;font-weight:400;color:#6B6B6B}
+.ban .l2{font-size:14px;line-height:1.35;margin-top:1px}.ban img{width:30px;height:30px;border-radius:50%;object-fit:cover;flex:none;margin-top:2px}
+.dock{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);height:76px;padding:0 12px;border-radius:22px;background:rgba(255,255,255,.6);box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 8px 24px rgba(0,0,0,.08);display:flex;align-items:center}
+.dk{position:relative;width:58px;height:58px}.dk .bd{position:absolute;right:-6px;top:-6px;min-width:24px;height:24px;border-radius:12px;background:#FF3B30;color:#fff;font-size:14px;font-weight:600;display:grid;place-items:center;padding:0 6px}
+.dk:after{content:"";position:absolute;left:50%;bottom:-8px;width:4px;height:4px;border-radius:50%;background:#555;transform:translateX(-50%)}
+
+.root{width:100vw !important;height:100vh !important}
+.btn1{cursor:pointer}.btn1:disabled{opacity:.6}
+</style></head><body><div class="root solo"><div class="first"><svg width="96" height="96" viewBox="0 0 100 100" role="img" aria-label="Wayza"><defs><clipPath id="j6a"><rect width="100" height="100" rx="23"/></clipPath></defs><rect width="100" height="100" rx="23" fill="#C42E69"/><g clip-path="url(#j6a)"><rect x="16.0" y="25.0" width="68" height="44" rx="22.0" fill="#fff"/><path d="M28.1 63.0 C28.1 71.0 22.6 76.0 16.44 79.0 C31.4 79.5 43.5 76.0 50.1 68.0 Z" fill="#fff"/><circle cx="35" cy="47" r="5.5" fill="#C42E69"/><circle cx="50" cy="47" r="5.5" fill="#E27AA4"/><circle cx="65" cy="47" r="5.5" fill="#F4C3D6"/></g></svg>
+<h1>Sign in to Wayza</h1><p>Rooms where people and their own AIs talk together.</p>
+<button class="btn1" type="button" id="go">Continue in your browser</button>
+<div class="fine">You’ll sign in on wayza.com with Google or your email, then come straight back here.</div></div></div><script>
+// MacFirst1. The sign-in itself happens in the browser; the app waits for it on 127.0.0.1 (src-tauri/src/auth.rs).
+var go=document.getElementById('go');
+go.addEventListener('click',function(){go.disabled=true;window.__TAURI_INTERNALS__.invoke('sign_in').catch(function(){}).finally(function(){go.disabled=false})});
+</script></body></html>
