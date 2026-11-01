@@ -400,18 +400,36 @@ async fn this_mac_runs_ai(app: &Shared) -> bool {
 async fn notify_message(h: &AppHandle, app: &Shared, room: &str, m: &Value, me: &str) {
     let Some(session) = app.session() else { return };
     let Ok(r) = app.api.get(&format!("/rooms/{}", enc(room)), &session).await else { return };
+    // The server's levels (NotifyRoom1): all, mentions (the default) or none.
     let level = r["notify"]["level"].as_str().unwrap_or("mentions");
-    if !r["notify"]["muted_until"].is_null() || level == "nothing" {
+    if !r["notify"]["muted_until"].is_null() || level == "none" {
+        return;
+    }
+    let who = m["from"]["name"].as_str().unwrap_or("Someone");
+    let text = m["text"].as_str().unwrap_or("");
+    let room_name = r["name"].as_str().unwrap_or("Wayza");
+    // An ask (MacAsk1): one banner when it is new, "Claude asks you: …". Answering happens only in the room, where the
+    // whole card is, so the banner has no buttons. The card changing later (answered, taken back) is no news.
+    if m["kind"] == json!("ask") {
+        let k = &m["ask"];
+        if k["status"] != json!("waiting") {
+            return;
+        }
+        if k["to"] == json!(me) {
+            banner(h, room_name, &format!("{who} asks you: {text}"));
+        } else if level == "all" {
+            banner(h, room_name, &format!("{who} asks {}: {text}", k["to_name"].as_str().unwrap_or("someone")));
+        }
         return;
     }
     let mentioned = m["mentions"].as_array().map(|a| a.iter().any(|x| x == &json!(me))).unwrap_or(false);
-    // AIs talking to each other never notify you, whatever the bell is set to (the bell's own note says so).
+    // AIs talking to each other never notify you, whatever the bell is set to (the bell's own note says so). An ask is
+    // handled above, so "Claude asks you" still makes a banner.
     if m["from"]["kind"] == json!("ai") && !mentioned {
         return;
     }
-    if level == "everything" || mentioned {
-        let who = m["from"]["name"].as_str().unwrap_or("Someone");
-        banner(h, r["name"].as_str().unwrap_or("Wayza"), &format!("{who}: {}", m["text"].as_str().unwrap_or("")));
+    if level == "all" || mentioned {
+        banner(h, room_name, &format!("{who}: {text}"));
     }
 }
 
