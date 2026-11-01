@@ -39,6 +39,10 @@ struct Saved {
 struct RoomSaved {
     session: Option<String>,
     side_session: Option<String>,
+    // Turns with the person's computer keep their own conversation, so what Claude read there never carries into a turn
+    // that answers someone else.
+    #[serde(default)]
+    computer_session: Option<String>,
     seen: Option<String>, // the last room message Claude has been shown
 }
 
@@ -539,8 +543,12 @@ async fn turn(app: &Shared, room: &str, side: bool) -> Result<()> {
         if lines.is_empty() {
             return Ok(());
         }
-        // Whose ask this is: the newest message that isn't Claude's own.
-        owner_asked = msgs.iter().rev().find(|m| m["from"]["address"] != json!(ai_addr)).map(|m| m["from"]["address"] == json!(owner_addr)).unwrap_or(false);
+        // Whose ask this is: the person's alone only when every new message Claude is shown is theirs. One line from anyone
+        // else in the turn and it gets web and room tools at most.
+        owner_asked = msgs
+            .iter()
+            .filter(|m| m["from"]["address"] != json!(ai_addr) && (m["text"].as_str().map(|t| !t.is_empty()).unwrap_or(false) || m["files"].as_array().map(|f| !f.is_empty()).unwrap_or(false)))
+            .all(|m| m["from"]["address"] == json!(owner_addr));
         // The photos and documents Claude can read, newest MAX_PHOTOS of them, attached in order; any it can't fetch are
         // left out. A text file goes as its words; a photo or PDF as itself.
         let skip = shown.len().saturating_sub(MAX_PHOTOS);
@@ -569,6 +577,8 @@ async fn turn(app: &Shared, room: &str, side: bool) -> Result<()> {
         "mac" if side || owner_asked => claude::Tools::Computer,
         _ => claude::Tools::Web,
     };
+    let computer = matches!(tools, claude::Tools::Computer) && !side;
+    let resume = if computer { saved.computer_session.clone() } else { resume };
     let can = match tools {
         claude::Tools::Words => "You have no tools here: you can't see, run or change anything on this computer, its files or the web, so never offer or start to; just answer in words, and say plainly when something needs tools.",
         claude::Tools::Web => "You can search the web and read web pages. Nothing on this computer: you can't see, run or change its files, so never offer or start to.",
@@ -631,7 +641,11 @@ async fn turn(app: &Shared, room: &str, side: bool) -> Result<()> {
             app.api.patch(&path, &key, json!({ "text": text, "done": true })).await?;
             let mut s = app.saved.lock().unwrap();
             let r = s.rooms.entry(room.to_string()).or_default();
-            r.session = run.session;
+            if computer {
+                r.computer_session = run.session;
+            } else {
+                r.session = run.session;
+            }
             r.seen = Some(mid.clone()).or(seen);
             drop(s);
             app.save();
