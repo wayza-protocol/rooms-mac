@@ -32,7 +32,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ -z "$APPLE_CERTIFICATE" ]; then unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; fi
-          npx tauri build --target universal-apple-darwin
+          npx tauri build --target universal-apple-darwin --verbose
       - uses: actions/upload-artifact@v4
         with:
           name: Wayza-mac
