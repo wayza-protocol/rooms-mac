@@ -72,6 +72,31 @@ pub fn state(path: &str) -> State {
     }
 }
 
+// Claude Code's sign-in has ended (revoked, expired): it says so only when asked to answer. `claude auth status` can
+// still say loggedIn.
+#[derive(Debug)]
+pub struct SignedOut(pub String);
+impl std::fmt::Display for SignedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for SignedOut {}
+
+// What this Claude Code's command line offers, from its own --help, asked once per launch.
+#[derive(Clone, Copy)]
+struct Caps {
+    safe_mode: bool,
+    permission_prompts: bool,
+}
+fn caps(bin: &PathBuf) -> Caps {
+    static CAPS: std::sync::OnceLock<Caps> = std::sync::OnceLock::new();
+    *CAPS.get_or_init(|| {
+        let help = std::process::Command::new(bin).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+        Caps { safe_mode: help.contains("--safe-mode"), permission_prompts: help.contains("--permission-prompts") }
+    })
+}
+
 pub struct Run {
     pub text: String,
     pub session: Option<String>,
@@ -82,13 +107,23 @@ pub struct Run {
 pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, resume: Option<&str>, mut on_text: impl FnMut(&str)) -> Result<Run> {
     let Some(bin) = find(path) else { bail!("Claude Code isn't on this Mac.") };
     std::fs::create_dir_all(cwd)?;
-    let mut cmd = Command::new(bin);
+    let mut cmd = Command::new(&bin);
     cmd.current_dir(cwd)
         .env("PATH", path)
         .args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
-        .arg("--safe-mode")
-        .args(["--tools", "", "--disallowedTools", "*"])
-        .args(["--permission-prompts", "none", "--permission-mode", "dontAsk"])
+        .args(["--tools", "", "--disallowedTools", "*", "--permission-mode", "dontAsk"]);
+    // Newer Claude Code has --safe-mode (none of the person's own setup) and --permission-prompts. Older versions
+    // (2.1.141 on Graham's Mac, 1 Nov 2026) don't: there, no settings sources and no hooks instead.
+    let caps = caps(&bin);
+    if caps.safe_mode {
+        cmd.arg("--safe-mode");
+    } else {
+        cmd.args(["--setting-sources", "", "--settings", r#"{"disableAllHooks":true}"#]);
+    }
+    if caps.permission_prompts {
+        cmd.args(["--permission-prompts", "none"]);
+    }
+    cmd
         .args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#, "--disable-slash-commands"])
         .args(["--append-system-prompt", system]);
     if let Some(id) = resume {
@@ -116,7 +151,11 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, resume: 
             }
             Some("result") => {
                 if v["is_error"].as_bool() == Some(true) {
-                    bail!("{}", v["result"].as_str().unwrap_or("Claude Code stopped."));
+                    let why = v["result"].as_str().unwrap_or("Claude Code stopped.");
+                    if why.contains("Failed to authenticate") || why.contains("401") {
+                        bail!(SignedOut(why.to_string()));
+                    }
+                    bail!("{}", why);
                 }
                 result = v["result"].as_str().map(str::to_string);
             }

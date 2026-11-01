@@ -49,6 +49,7 @@ struct App {
     saved: Mutex<Saved>,
     busy: Mutex<HashMap<String, bool>>, // rooms Claude is answering in now, and whether more came meanwhile
     signing_in: std::sync::atomic::AtomicBool,
+    revoked: std::sync::atomic::AtomicBool, // Claude Code said its sign-in ended, until it answers again
     live: tokio::sync::Notify,    // wakes the account socket after signing in
 }
 type Shared = Arc<App>;
@@ -63,6 +64,13 @@ impl App {
     }
     fn ai_key(&self) -> Option<String> {
         auth::kept("ai:claude")
+    }
+    // Claude Code's state, as the page shows it; signed out also when it said its sign-in ended.
+    fn claude_state(&self) -> claude::State {
+        match claude::state(&self.path) {
+            claude::State::Ready if self.revoked.load(std::sync::atomic::Ordering::SeqCst) => claude::State::SignedOut,
+            s => s,
+        }
     }
     fn mac_id(&self) -> String {
         self.saved.lock().unwrap().mac.clone()
@@ -82,7 +90,7 @@ fn mac_name() -> String {
 
 // window.wayzaMac, which the room page reads (room-pages.js APP), and the page's events, turned into the app's commands.
 fn init_script(app: &App) -> String {
-    let st = json!({ "mac": app.mac_id(), "claude": claude::state(&app.path).as_str() });
+    let st = json!({ "mac": app.mac_id(), "claude": app.claude_state().as_str() });
     format!(
         r#"(function(){{
   if (location.origin !== {origin}) return;
@@ -106,7 +114,7 @@ fn window(h: &AppHandle) -> Option<WebviewWindow> {
 // Tell the open page that Claude Code's state changed (installed, signed in), so the sheet and footer redraw.
 fn push_state(h: &AppHandle) {
     let app = h.state::<Shared>();
-    let st = json!({ "mac": app.mac_id(), "claude": claude::state(&app.path).as_str() });
+    let st = json!({ "mac": app.mac_id(), "claude": app.claude_state().as_str() });
     if let Some(w) = window(h) {
         let _ = w.eval(&format!("window.__wayzaMacSet && window.__wayzaMacSet({st})"));
     }
@@ -171,7 +179,7 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>) -> Result<()
         return Err(anyhow!("That isn't a room."));
     }
     let app = h.state::<Shared>().inner().clone();
-    if claude::state(&app.path) != claude::State::Ready {
+    if app.claude_state() != claude::State::Ready {
         push_state(h);
         return Ok(());
     }
@@ -210,6 +218,7 @@ fn get_claude_code(h: AppHandle) {
 fn claude_sign_in(h: AppHandle) {
     let app = h.state::<Shared>();
     let Some(bin) = claude::find(&app.path) else { return };
+    app.revoked.store(false, std::sync::atomic::Ordering::SeqCst); // until Claude Code says otherwise
     let script = format!("tell application \"Terminal\"\nactivate\ndo script \"{} /login\"\nend tell", bin.display().to_string().replace('"', "\\\""));
     let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
 }
@@ -220,7 +229,7 @@ fn claude_sign_in(h: AppHandle) {
 async fn use_this_mac(h: AppHandle) -> Result<(), String> {
     let app = h.state::<Shared>().inner().clone();
     let session = app.session().ok_or("Sign in first.")?;
-    let signed_out: Vec<&str> = if claude::state(&app.path) == claude::State::SignedOut { vec!["claude"] } else { vec![] };
+    let signed_out: Vec<&str> = if app.claude_state() == claude::State::SignedOut { vec!["claude"] } else { vec![] };
     app.api
         .put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "state": "on", "signed_out": signed_out }))
         .await
@@ -386,8 +395,16 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool) {
         }
         r = turn(app, room, side).await;
     }
+    if r.is_ok() {
+        app.revoked.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
     if let Err(e) = r {
-        if claude::state(&app.path) == claude::State::SignedOut {
+        // A sign-in that has ended shows as signed out (MacSignedOut1), even when Claude Code's files still look signed in.
+        let revoked = e.downcast_ref::<claude::SignedOut>().is_some();
+        if revoked {
+            app.revoked.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        if app.claude_state() == claude::State::SignedOut {
             if let Some(session) = app.session() {
                 let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "signed_out": ["claude"] })).await;
             }
@@ -540,6 +557,7 @@ fn main() {
                 saved: Mutex::new(saved),
                 busy: Mutex::new(HashMap::new()),
                 signing_in: std::sync::atomic::AtomicBool::new(false),
+                revoked: std::sync::atomic::AtomicBool::new(false),
                 live: tokio::sync::Notify::new(),
             });
             app.save();
