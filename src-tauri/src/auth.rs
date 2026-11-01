@@ -78,17 +78,31 @@ fn page(done: bool) -> String {
     format!(r#"<!doctype html><meta charset="utf-8"><title>Wayza</title><body style="margin:0;height:100vh;display:grid;place-items:center;background:#FAFAF9;font-family:-apple-system,system-ui,sans-serif;color:#111;font-size:17px;font-weight:500">{line}<script>setTimeout(function(){{window.close()}},1500)</script></body>"#)
 }
 
-// The app's own secrets, in the login Keychain.
+// The app's own secrets, in the login Keychain. Each is read from the Keychain at most once per launch and then held in
+// memory: until builds are signed, every new build makes macOS ask for each read that hasn't had "Always Allow".
 const SERVICE: &str = "com.wayza.rooms";
+static HELD: std::sync::Mutex<Option<std::collections::HashMap<String, Option<String>>>> = std::sync::Mutex::new(None);
 
+fn held<T>(f: impl FnOnce(&mut std::collections::HashMap<String, Option<String>>) -> T) -> T {
+    let mut g = HELD.lock().unwrap_or_else(|e| e.into_inner());
+    f(g.get_or_insert_with(Default::default))
+}
 pub fn keep(account: &str, secret: &str) -> Result<()> {
-    keyring::Entry::new(SERVICE, account)?.set_password(secret).map_err(|e| anyhow!(e))
+    keyring::Entry::new(SERVICE, account)?.set_password(secret).map_err(|e| anyhow!(e))?;
+    held(|h| h.insert(account.to_string(), Some(secret.to_string())));
+    Ok(())
 }
 pub fn kept(account: &str) -> Option<String> {
-    keyring::Entry::new(SERVICE, account).ok()?.get_password().ok()
+    // The lock is held through the read, so two first reads at launch make one prompt, not two.
+    held(|h| {
+        h.entry(account.to_string())
+            .or_insert_with(|| keyring::Entry::new(SERVICE, account).ok().and_then(|e| e.get_password().ok()))
+            .clone()
+    })
 }
 pub fn forget(account: &str) {
     if let Ok(e) = keyring::Entry::new(SERVICE, account) {
         let _ = e.delete_credential();
     }
+    held(|h| h.insert(account.to_string(), None));
 }
