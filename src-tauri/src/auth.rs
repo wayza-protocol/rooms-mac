@@ -41,7 +41,11 @@ pub async fn round_trip(path: &str, state: &str, open: impl FnOnce(u16) -> Resul
         loop {
             let (mut sock, _) = listener.accept().await?;
             let mut buf = vec![0u8; 8192];
-            let n = sock.read(&mut buf).await.unwrap_or(0);
+            // A connection that sends nothing must not hold the sign-in up: 5 seconds, then the next one.
+            let n = match tokio::time::timeout(Duration::from_secs(5), sock.read(&mut buf)).await {
+                Ok(Ok(n)) => n,
+                _ => continue,
+            };
             let req = String::from_utf8_lossy(&buf[..n]);
             let target = req.lines().next().unwrap_or("").split(' ').nth(1).unwrap_or("").to_string();
             let url = url::Url::parse(&format!("http://127.0.0.1{target}")).ok();
@@ -68,10 +72,10 @@ pub async fn round_trip(path: &str, state: &str, open: impl FnOnce(u16) -> Resul
     }
 }
 
-// The browser tab after wayza.com sends it back here. No board shows it: plain words, in the rooms' font.
+// The browser tab after wayza.com sends it back here. No board shows it: plain words, in the system font (no fetch).
 fn page(done: bool) -> String {
     let line = if done { "Done. You can go back to the Wayza app." } else { "Nothing changed. You can go back to the Wayza app." };
-    format!(r#"<!doctype html><meta charset="utf-8"><title>Wayza</title><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700&display=swap"><body style="margin:0;height:100vh;display:grid;place-items:center;background:#FAFAF9;font-family:'Plus Jakarta Sans',sans-serif;color:#111;font-size:17px;font-weight:500">{line}<script>setTimeout(function(){{window.close()}},1500)</script></body>"#)
+    format!(r#"<!doctype html><meta charset="utf-8"><title>Wayza</title><body style="margin:0;height:100vh;display:grid;place-items:center;background:#FAFAF9;font-family:-apple-system,system-ui,sans-serif;color:#111;font-size:17px;font-weight:500">{line}<script>setTimeout(function(){{window.close()}},1500)</script></body>"#)
 }
 
 // The app's own secrets, in the login Keychain.

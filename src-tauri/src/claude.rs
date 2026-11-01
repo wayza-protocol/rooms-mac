@@ -1,8 +1,10 @@
 // The person's own Claude Code, run on this Mac with their own sign-in. The app never installs it and never sees that
 // sign-in: it only runs `claude -p` and reads what it says.
 //
-// In a room, Claude has no tools and none of the person's MCP servers: everyone in the room can talk to it, so it can
-// answer, never act on this Mac.
+// In a room, everyone can talk to it, so it can answer and never act on this Mac: no tools at all, no MCP servers, and
+// none of the person's own setup (hooks, CLAUDE.md, memory, skills, plugins) that room text could reach or recite.
+// --safe-mode keeps their own Claude sign-in, where --bare would need an API key (code.claude.com/docs/en/cli-reference,
+// read 1 Nov 2026).
 
 use anyhow::{bail, Result};
 use serde_json::Value;
@@ -70,8 +72,6 @@ pub fn state(path: &str) -> State {
     }
 }
 
-const NO_TOOLS: &str = "Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,LS,WebFetch,WebSearch,Task,TodoWrite,KillShell,BashOutput,SlashCommand,Skill";
-
 pub struct Run {
     pub text: String,
     pub session: Option<String>,
@@ -86,8 +86,10 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, resume: 
     cmd.current_dir(cwd)
         .env("PATH", path)
         .args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
-        .args(["--disallowedTools", NO_TOOLS])
-        .args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#])
+        .arg("--safe-mode")
+        .args(["--tools", "", "--disallowedTools", "*"])
+        .args(["--permission-prompts", "none", "--permission-mode", "dontAsk", "--max-turns", "1"])
+        .args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#, "--disable-slash-commands"])
         .args(["--append-system-prompt", system]);
     if let Some(id) = resume {
         cmd.args(["--resume", id]);
