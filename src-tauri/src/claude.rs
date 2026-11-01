@@ -124,21 +124,50 @@ pub enum Tools {
     Computer,
 }
 
-pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: &[Image], tools: Tools, resume: Option<&str>, mut on_text: impl FnMut(&str)) -> Result<Run> {
+// The room's own tools for this turn (wayza.com's turn pass), as Claude Code calls them. The pass itself is only in the
+// MCP config file, never on the command line, where `ps` would show it.
+pub const ROOM_TOOLS: [&str; 5] = [
+    "mcp__wayza-room__room_read",
+    "mcp__wayza-room__room_ask",
+    "mcp__wayza-room__room_ask_answer",
+    "mcp__wayza-room__room_ask_pass",
+    "mcp__wayza-room__room_ask_take_back",
+];
+
+// The MCP config file for a turn pass: only the person's Mac user can read it, and it goes when the turn ends.
+pub fn write_room_config(path: &PathBuf, base: &str, pass: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let cfg = json!({ "mcpServers": { "wayza-room": { "type": "http", "url": format!("{}/wayza/mcp", base.trim_end_matches('/')), "headers": { "Authorization": format!("Bearer {pass}") } } } });
+    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    f.write_all(cfg.to_string().as_bytes())?;
+    Ok(())
+}
+
+pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: &[Image], tools: Tools, room: Option<&PathBuf>, resume: Option<&str>, mut on_text: impl FnMut(&str)) -> Result<Run> {
     let Some(bin) = find(path) else { bail!("Claude Code isn't on this computer.") };
     std::fs::create_dir_all(cwd)?;
     let mut cmd = Command::new(&bin);
+    // Room tools, when wayza.com gave this turn a pass: allowed without asking, like the turn's other tools.
+    let room_tools = if room.is_some() { format!(",{}", ROOM_TOOLS.join(",")) } else { String::new() };
     cmd.current_dir(cwd).env("PATH", path).args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
     match tools {
         Tools::Words => {
             cmd.args(["--tools", "", "--disallowedTools", "*"]);
         }
         Tools::Web => {
-            cmd.args(["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch"]);
+            cmd.args(["--tools", "WebSearch,WebFetch", "--allowedTools"]).arg(format!("WebSearch,WebFetch{room_tools}"));
         }
         Tools::Computer => {
             // The room's own folder stays the working folder, so the room's conversation carries on; home is added.
-            cmd.args(["--allowedTools", "Read,Glob,Grep,WebSearch,WebFetch"]);
+            cmd.arg("--allowedTools").arg(format!("Read,Glob,Grep,WebSearch,WebFetch{room_tools}"));
+            // Their own MCP servers load as usual; the room's is added.
+            if let Some(r) = room {
+                cmd.arg(format!("--mcp-config={}", r.display()));
+            }
             if let Some(h) = std::env::var_os("HOME") {
                 cmd.arg("--add-dir").arg(h);
             }
@@ -148,13 +177,19 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: 
     let caps = caps(&bin);
     if tools != Tools::Computer {
         // Newer Claude Code has --safe-mode (none of the person's own setup). Older versions (2.1.141 on Graham's Mac,
-        // 1 Nov 2026) don't: there, no settings sources and no hooks instead.
-        if caps.safe_mode {
+        // 1 Nov 2026) don't: there, no settings sources and no hooks instead. --safe-mode also drops the servers
+        // --mcp-config names (2.1.316, tried 1 Nov 2026), so a turn with room tools uses the second way too: it loads
+        // only the room's server, with no skills, plugins of theirs or slash commands.
+        if caps.safe_mode && room.is_none() {
             cmd.arg("--safe-mode");
         } else {
             cmd.args(["--setting-sources", "", "--settings", r#"{"disableAllHooks":true}"#]);
         }
-        cmd.args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#]);
+        cmd.arg("--strict-mcp-config");
+        match room {
+            Some(r) => cmd.arg(format!("--mcp-config={}", r.display())),
+            None => cmd.args(["--mcp-config", r#"{"mcpServers":{}}"#]),
+        };
     }
     if caps.permission_prompts {
         cmd.args(["--permission-prompts", "none"]);
