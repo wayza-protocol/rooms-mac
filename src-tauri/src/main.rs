@@ -90,14 +90,14 @@ fn mac_name() -> String {
 
 // window.wayzaMac, which the room page reads (room-pages.js APP), and the page's events, turned into the app's commands.
 fn init_script(app: &App) -> String {
-    let st = json!({ "mac": app.mac_id(), "claude": app.claude_state().as_str() });
+    let st = json!({ "mac": app.mac_id(), "claude": app.claude_state().as_str(), "ai": app.saved.lock().unwrap().ai.clone() });
     format!(
         r#"(function(){{
   if (location.origin !== {origin}) return;
   window.wayzaMac = {st};
   window.__wayzaMacSet = function (s) {{ window.wayzaMac = s; document.dispatchEvent(new CustomEvent('wayza-mac')); }};
   var inv = function (c, a) {{ try {{ return window.__TAURI_INTERNALS__.invoke(c, a || {{}}); }} catch (e) {{}} }};
-  document.addEventListener('wayza-bring', function (e) {{ var d = e.detail || {{}}; inv('bring', {{ maker: d.maker || 'claude', room: d.room || null }}); }});
+  document.addEventListener('wayza-bring', function (e) {{ var d = e.detail || {{}}; inv('bring', {{ maker: d.maker || 'claude', room: d.room || null, ai: d.ai || null }}); }});
   document.addEventListener('wayza-get-claude-code', function () {{ inv('get_claude_code'); }});
   document.addEventListener('wayza-signin', function () {{ inv('claude_sign_in'); }});
   document.addEventListener('wayza-use-this-mac', function () {{ inv('use_this_mac'); }});
@@ -130,7 +130,7 @@ fn window(h: &AppHandle) -> Option<WebviewWindow> {
 // Tell the open page that Claude Code's state changed (installed, signed in), so the sheet and footer redraw.
 fn push_state(h: &AppHandle) {
     let app = h.state::<Shared>();
-    let st = json!({ "mac": app.mac_id(), "claude": app.claude_state().as_str() });
+    let st = json!({ "mac": app.mac_id(), "claude": app.claude_state().as_str(), "ai": app.saved.lock().unwrap().ai.clone() });
     if let Some(w) = window(h) {
         let _ = w.eval(&format!("window.__wayzaMacSet && window.__wayzaMacSet({st})"));
     }
@@ -183,11 +183,16 @@ async fn sign_in_once(h: &AppHandle, app: &Shared) -> Result<()> {
 // ---------- Bring your Claude (MacBring3, MacConsent1) ----------
 
 #[tauri::command]
-async fn bring(h: AppHandle, maker: String, room: Option<String>) -> Result<(), String> {
-    do_bring(&h, &maker, room).await.map_err(|e| e.to_string())
+async fn bring(h: AppHandle, maker: String, room: Option<String>, ai: Option<String>) -> Result<(), String> {
+    do_bring(&h, &maker, room, ai).await.map_err(|e| {
+        log(&format!("bring failed: {e}"));
+        e.to_string()
+    })
 }
 
-async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>) -> Result<()> {
+// ai: the person's Claude, as the page knows it. One Claude per person (Graham, 1 Nov 2026): an app holding another
+// (an older build made a second one) asks again, and wayza.com hands it the person's own.
+async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option<String>) -> Result<()> {
     if maker != "claude" {
         return Err(anyhow!("The Wayza app brings Claude in for now."));
     }
@@ -200,7 +205,8 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>) -> Result<()
         return Ok(());
     }
     // Asked once: after a yes, the AI's key is in the Keychain and bringing it to another room needs no page.
-    if app.ai_key().is_none() || app.saved.lock().unwrap().ai.is_none() {
+    let held = app.saved.lock().unwrap().ai.clone();
+    if app.ai_key().is_none() || held.is_none() || (want.is_some() && want != held) {
         let p = auth::pkce();
         let state = auth::random(24);
         let q = auth::round_trip("bring", &state, |port| {
@@ -212,7 +218,9 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>) -> Result<()
         let t = app.api.ai_token(code, &p.verifier).await?;
         auth::keep("ai:claude", t["key"].as_str().ok_or_else(|| anyhow!("no key"))?)?;
         app.saved.lock().unwrap().ai = t["address"].as_str().map(str::to_string);
+        app.saved.lock().unwrap().rooms.clear(); // the old Claude's conversations were its own
         app.save();
+        push_state(h);
     }
     let (Some(room), Some(session), Some(ai)) = (room, app.session(), app.saved.lock().unwrap().ai.clone()) else { return Ok(()) };
     app.api.post(&format!("/rooms/{}/members", enc(&room)), Some(&session), json!({ "address": ai })).await?;
