@@ -1,8 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The app's own first-launch page, and the room pages on wayza.com (only /account/rooms), may call the app's few commands (bring, sign in, get Claude Code, use this Mac).",
+  "description": "The app's own first-launch page: sign in.",
   "windows": ["main"],
-  "remote": { "urls": ["https://wayza.com/account/rooms*"] },
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "allow-sign-in"]
 }
