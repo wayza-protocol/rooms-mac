@@ -113,28 +113,53 @@ pub struct Image {
 // One turn: the prompt in, Claude's answer out. `on_text` gets the answer so far as it grows, for the room's
 // "writing" line. `resume` carries on the room's own conversation. With photos, the prompt and the photos go in on
 // stdin as one stream-json user message, since a prompt argument can only carry words.
-pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: &[Image], resume: Option<&str>, mut on_text: impl FnMut(&str)) -> Result<Run> {
-    let Some(bin) = find(path) else { bail!("Claude Code isn't on this Mac.") };
+// What Claude may use in this turn, from the room's setting (Graham, 1 Nov 2026) and who asked:
+// Words: nothing at all. Web: web search and reading web pages, still none of the person's own setup. Computer: only for
+// the person's own ask, in a room they set to "My computer too": their own setup (settings, CLAUDE.md, MCP servers),
+// their home folder to read, and anything else only as their own permission rules already allow, never by asking.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Tools {
+    Words,
+    Web,
+    Computer,
+}
+
+pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: &[Image], tools: Tools, resume: Option<&str>, mut on_text: impl FnMut(&str)) -> Result<Run> {
+    let Some(bin) = find(path) else { bail!("Claude Code isn't on this computer.") };
     std::fs::create_dir_all(cwd)?;
     let mut cmd = Command::new(&bin);
-    cmd.current_dir(cwd)
-        .env("PATH", path)
-        .args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
-        .args(["--tools", "", "--disallowedTools", "*", "--permission-mode", "dontAsk"]);
-    // Newer Claude Code has --safe-mode (none of the person's own setup) and --permission-prompts. Older versions
-    // (2.1.141 on Graham's Mac, 1 Nov 2026) don't: there, no settings sources and no hooks instead.
+    cmd.current_dir(cwd).env("PATH", path).args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
+    match tools {
+        Tools::Words => {
+            cmd.args(["--tools", "", "--disallowedTools", "*"]);
+        }
+        Tools::Web => {
+            cmd.args(["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch"]);
+        }
+        Tools::Computer => {
+            // The room's own folder stays the working folder, so the room's conversation carries on; home is added.
+            cmd.args(["--allowedTools", "Read,Glob,Grep,WebSearch,WebFetch"]);
+            if let Some(h) = std::env::var_os("HOME") {
+                cmd.arg("--add-dir").arg(h);
+            }
+        }
+    }
+    cmd.args(["--permission-mode", "dontAsk"]);
     let caps = caps(&bin);
-    if caps.safe_mode {
-        cmd.arg("--safe-mode");
-    } else {
-        cmd.args(["--setting-sources", "", "--settings", r#"{"disableAllHooks":true}"#]);
+    if tools != Tools::Computer {
+        // Newer Claude Code has --safe-mode (none of the person's own setup). Older versions (2.1.141 on Graham's Mac,
+        // 1 Nov 2026) don't: there, no settings sources and no hooks instead.
+        if caps.safe_mode {
+            cmd.arg("--safe-mode");
+        } else {
+            cmd.args(["--setting-sources", "", "--settings", r#"{"disableAllHooks":true}"#]);
+        }
+        cmd.args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#]);
     }
     if caps.permission_prompts {
         cmd.args(["--permission-prompts", "none"]);
     }
-    cmd
-        .args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#, "--disable-slash-commands"])
-        .args(["--append-system-prompt", system]);
+    cmd.args(["--disable-slash-commands", "--append-system-prompt", system]);
     if let Some(id) = resume {
         cmd.args(["--resume", id]);
     }
