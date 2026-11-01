@@ -48,6 +48,14 @@ impl Api {
         self.call(reqwest::Method::PUT, path, Some(bearer), Some(body)).await
     }
 
+    // A photo or file's bytes (rooms/{id}/files/{file}), as the AI.
+    pub async fn bytes(&self, path: &str, bearer: &str) -> Result<Vec<u8>> {
+        let res = self.http.get(format!("{}/wayza/v0{}", self.base, path)).bearer_auth(bearer).send().await?;
+        if !res.status().is_success() {
+            bail!("wayza.com said no ({})", res.status().as_u16());
+        }
+        Ok(res.bytes().await?.to_vec())
+    }
     // The app's own session, from the code the browser brought back.
     pub async fn token(&self, code: &str, verifier: &str) -> Result<Value> {
         self.post("/mac/token", None, json!({ "code": code, "code_verifier": verifier })).await
