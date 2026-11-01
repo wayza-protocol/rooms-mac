@@ -88,7 +88,7 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, resume: 
         .args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
         .arg("--safe-mode")
         .args(["--tools", "", "--disallowedTools", "*"])
-        .args(["--permission-prompts", "none", "--permission-mode", "dontAsk", "--max-turns", "1"])
+        .args(["--permission-prompts", "none", "--permission-mode", "dontAsk"])
         .args(["--strict-mcp-config", "--mcp-config", r#"{"mcpServers":{}}"#, "--disable-slash-commands"])
         .args(["--append-system-prompt", system]);
     if let Some(id) = resume {

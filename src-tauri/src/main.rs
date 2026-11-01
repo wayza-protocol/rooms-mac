@@ -373,7 +373,7 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool) {
     loop {
         let again = {
             let mut b = app.busy.lock().unwrap();
-            if b.get(&key) == Some(&true) && r.is_ok() {
+            if b.get(&key) == Some(&true) {
                 b.insert(key.clone(), false);
                 true
             } else {
