@@ -7,10 +7,10 @@
 // read 1 Nov 2026).
 
 use anyhow::{bail, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -102,9 +102,16 @@ pub struct Run {
     pub session: Option<String>,
 }
 
+// A photo for Claude to see: its media type (image/jpeg, png, gif or webp) and its bytes in base64.
+pub struct Image {
+    pub media_type: String,
+    pub data: String,
+}
+
 // One turn: the prompt in, Claude's answer out. `on_text` gets the answer so far as it grows, for the room's
-// "writing" line. `resume` carries on the room's own conversation.
-pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, resume: Option<&str>, mut on_text: impl FnMut(&str)) -> Result<Run> {
+// "writing" line. `resume` carries on the room's own conversation. With photos, the prompt and the photos go in on
+// stdin as one stream-json user message, since a prompt argument can only carry words.
+pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: &[Image], resume: Option<&str>, mut on_text: impl FnMut(&str)) -> Result<Run> {
     let Some(bin) = find(path) else { bail!("Claude Code isn't on this Mac.") };
     std::fs::create_dir_all(cwd)?;
     let mut cmd = Command::new(&bin);
@@ -129,8 +136,20 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, resume: 
     if let Some(id) = resume {
         cmd.args(["--resume", id]);
     }
-    cmd.arg(prompt).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    if images.is_empty() {
+        cmd.arg(prompt).stdin(Stdio::null());
+    } else {
+        cmd.args(["--input-format", "stream-json"]).stdin(Stdio::piped());
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut child = cmd.spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let mut content = vec![json!({ "type": "text", "text": prompt })];
+        content.extend(images.iter().map(|i| json!({ "type": "image", "source": { "type": "base64", "media_type": i.media_type, "data": i.data } })));
+        let line = json!({ "type": "user", "message": { "role": "user", "content": content } }).to_string() + "\n";
+        stdin.write_all(line.as_bytes()).await?;
+        drop(stdin);
+    }
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
     let (mut text, mut session, mut result) = (String::new(), None, None);
     while let Some(line) = lines.next_line().await? {
