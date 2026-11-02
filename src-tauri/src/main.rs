@@ -323,7 +323,7 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
     }
     let app = h.state::<Shared>().inner().clone();
     if maker == "chatgpt" {
-        return bring_gpt(h, &app, room, ais, new_ai, others).await;
+        return bring_gpt(h, &app, room, ais, new_ai).await;
     }
     if app.claude_state() != claude::State::Ready {
         push_state(h);
@@ -393,11 +393,22 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
 
 // ChatGPT, run by the Codex on this computer (MacBring4, MacConsent2): asked once on wayza.com for the first one, then
 // any others the person ticks or makes, as for Claude.
-// A ChatGPT moves this Mac into use the same way a Claude does (do_bring), so exactly one Mac answers for each AI.
-async fn bring_gpt(h: &AppHandle, app: &Shared, room: Option<String>, ais: Vec<String>, new_ai: Option<Value>, others: Vec<String>) -> Result<()> {
+// Bring your ChatGPT, only on the Mac in use (or with none in use yet), so exactly one Mac answers for each AI.
+async fn bring_gpt(h: &AppHandle, app: &Shared, room: Option<String>, ais: Vec<String>, new_ai: Option<Value>) -> Result<()> {
     if app.codex_state() != claude::State::Ready {
         push_state(h);
         return Ok(());
+    }
+    // Another Mac in use runs your Claudes: bringing a ChatGPT here would move them all without their keys, so Use this
+    // Mac comes first (it moves every AI the app runs). With no Mac in use yet, this one becomes it.
+    let session = app.session().ok_or_else(|| anyhow!("Sign in first."))?;
+    let active = app.api.get("/me/active-mac", &session).await?;
+    if !active["mac"].is_null() && active["mac"] != json!(app.mac_id()) {
+        push_state(h);
+        return Err(anyhow!("Your AIs answer from another Mac: Use this Mac first."));
+    }
+    if active["mac"].is_null() {
+        in_use_here(app, &session).await?;
     }
     if auth::kept("ai:chatgpt").is_none() || app.saved.lock().unwrap().gpt.is_none() {
         let p = auth::pkce();
@@ -408,25 +419,14 @@ async fn bring_gpt(h: &AppHandle, app: &Shared, room: Option<String>, ais: Vec<S
         })
         .await?;
         let Some(code) = q.get("code") else { return Ok(()) }; // Not now
-        // In use here before the new key, so the Mac it leaves never takes the key back (review 1).
-        if let Some(session) = app.session() {
-            in_use_here(app, &session).await?;
-        }
         let t = app.api.ai_token(code, &p.verifier).await?;
         auth::keep("ai:chatgpt", t["key"].as_str().ok_or_else(|| anyhow!("no key"))?)?;
         app.saved.lock().unwrap().gpt = t["address"].as_str().map(str::to_string);
         app.save();
         push_state(h);
-        if let Some(session) = app.session() {
-            take_more(app, &session, &others).await;
-        }
     }
     let (Some(room), Some(session), Some(first)) = (room, app.session(), app.saved.lock().unwrap().gpt.clone()) else { return Ok(()) };
     let mut bring: Vec<String> = Vec::new();
-    if ais.iter().any(|a| a.len() <= 200 && !app.held().contains(a)) && !this_mac_runs_ai(app).await {
-        in_use_here(app, &session).await?;
-        take_more(app, &session, &others).await;
-    }
     for a in ais.iter().filter(|a| a.len() <= 200) {
         if !app.held().contains(a) {
             let t = app.api.post("/mac/ais", Some(&session), json!({ "maker": "chatgpt", "address": a })).await?;
