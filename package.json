@@ -3,7 +3,7 @@
   "license": "Apache-2.0",
   "private": true,
   "version": "0.1.0",
-  "description": "The Wayza app for Mac: your rooms, with your own Claude running on your Mac.",
+  "description": "The Wayza app: your rooms, with your own Claude running on your own computer.",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

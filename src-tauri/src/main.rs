@@ -142,7 +142,7 @@ impl App {
 }
 
 fn mac_name() -> String {
-    platform::computer_name().unwrap_or_else(|| "this Mac".into())
+    platform::computer_name().unwrap_or_else(|| "this computer".into())
 }
 
 // window.wayzaMac, which the room page reads (room-pages.js APP), and the page's events, turned into the app's commands.
@@ -449,7 +449,7 @@ async fn use_this_mac(h: AppHandle, ai: Option<String>, ais: Option<Vec<String>>
     // (MacNoClaude1, MacSignedOut1), and the other Mac keeps answering (review 2).
     if app.claude_state() != claude::State::Ready {
         push_state(&h);
-        return Err("Claude Code isn't ready on this Mac.".into());
+        return Err("Claude Code isn't ready on this computer.".into());
     }
     // In use first, then the keys: the Mac they leave stops answering before its keys stop working, so it never takes
     // them back (review 1).

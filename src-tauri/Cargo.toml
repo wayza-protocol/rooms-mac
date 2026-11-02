@@ -2,7 +2,7 @@
 name = "wayza-rooms"
 version = "0.1.0"
 edition = "2021"
-description = "The Wayza app for Mac"
+description = "The Wayza app"
 license = "Apache-2.0"
 
 [build-dependencies]
