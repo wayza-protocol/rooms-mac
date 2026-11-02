@@ -1,5 +1,6 @@
 {
   "name": "wayza-rooms-mac",
+  "license": "Apache-2.0",
   "private": true,
   "version": "0.1.0",
   "description": "The Wayza app for Mac: your rooms, with your own Claude running on your Mac.",
