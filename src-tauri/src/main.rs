@@ -421,7 +421,12 @@ async fn bring_gpt(h: &AppHandle, app: &Shared, room: Option<String>, ais: Vec<S
         let Some(code) = q.get("code") else { return Ok(()) }; // Not now
         let t = app.api.ai_token(code, &p.verifier).await?;
         auth::keep("ai:chatgpt", t["key"].as_str().ok_or_else(|| anyhow!("no key"))?)?;
-        app.saved.lock().unwrap().gpt = t["address"].as_str().map(str::to_string);
+        {
+            let mut s = app.saved.lock().unwrap();
+            s.gpt = t["address"].as_str().map(str::to_string);
+            let a = s.gpt.clone().unwrap_or_default();
+            s.more.retain(|x| *x != a);
+        }
         app.save();
         push_state(h);
     }
@@ -486,9 +491,20 @@ fn hold_more(app: &Shared, t: &Value) -> Result<Option<String>> {
 }
 fn hold_more_as(app: &Shared, t: &Value, maker: &str) -> Result<Option<String>> {
     let (Some(addr), Some(key)) = (t["address"].as_str(), t["key"].as_str()) else { return Err(anyhow!("no key")) };
-    let s = app.saved.lock().unwrap();
+    let mut s = app.saved.lock().unwrap();
+    // Your first ChatGPT (wayza.com says first, as Use this Mac takes it to a Mac that never ran it) is held as the
+    // app's ChatGPT, never among the others, so its sign-in is reported and Bring needs no second yes for it.
+    if maker == "chatgpt" && t["first"] == true && s.gpt.as_deref() != Some(addr) {
+        if let Some(old) = s.gpt.replace(addr.to_string()) {
+            s.makers.remove(&old);
+        }
+        s.more.retain(|a| a != addr);
+    }
     if s.gpt.as_deref() == Some(addr) {
+        s.more.retain(|a| a != addr);
         drop(s);
+        app.save();
+        auth::forget(&format!("ai:{addr}"));
         auth::keep("ai:chatgpt", key)?;
         return Ok(Some(addr.to_string()));
     }
@@ -599,7 +615,10 @@ async fn use_this_mac(h: AppHandle, ai: Option<String>, ais: Option<Vec<String>>
     // Nothing moves unless an AI could answer here: Claude Code ready for your Claude, or, for someone whose only app AI
     // is a ChatGPT, Codex ready. Otherwise the page shows how to get it or sign in (MacNoClaude1, MacSignedOut1,
     // MacNoCodex1, MacSignedOutCodex1), and the other Mac keeps answering (review 2).
-    let want = ai.filter(|a| !a.is_empty() && a.len() <= 200).or_else(|| app.saved.lock().unwrap().ai.clone());
+    // The page names your Claude, or sends none with your other AIs when your only app AI is a ChatGPT; only a page that
+    // sends neither (an older one) falls back to the Claude this Mac remembers.
+    let ais = ais.unwrap_or_default();
+    let want = ai.filter(|a| !a.is_empty() && a.len() <= 200).or_else(|| if ais.is_empty() { app.saved.lock().unwrap().ai.clone() } else { None });
     let ready = if want.is_some() { app.claude_state() == claude::State::Ready } else { app.codex_state() == claude::State::Ready };
     if !ready {
         push_state(&h);
@@ -613,7 +632,7 @@ async fn use_this_mac(h: AppHandle, ai: Option<String>, ais: Option<Vec<String>>
         let got = hold_first(&app, &t).map_err(|e| e.to_string())?;
         log(&format!("use this Mac: runs {got} here now"));
     }
-    take_more(&app, &session, &ais.unwrap_or_default()).await;
+    take_more(&app, &session, &ais).await;
     push_state(&h);
     // Asks that came while the other Mac ran your AIs (or none did) are answered here now.
     {
