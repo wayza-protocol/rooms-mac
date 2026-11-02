@@ -453,10 +453,11 @@ fn claude_sign_in(h: AppHandle) {
 async fn use_this_mac(h: AppHandle, ai: Option<String>, ais: Option<Vec<String>>) -> Result<(), String> {
     let app = h.state::<Shared>().inner().clone();
     let session = app.session().ok_or("Sign in first.")?;
-    // Without Claude Code here, nothing moves: the page shows how to get it (MacNoClaude1), and the other Mac keeps answering.
-    if app.claude_state() == claude::State::Missing {
+    // Without Claude Code ready here (missing or signed out), nothing moves: the page shows how to get it or sign in
+    // (MacNoClaude1, MacSignedOut1), and the other Mac keeps answering (review 2).
+    if app.claude_state() != claude::State::Ready {
         push_state(&h);
-        return Err("Claude Code isn't on this Mac yet.".into());
+        return Err("Claude Code isn't ready on this Mac.".into());
     }
     // In use first, then the keys: the Mac they leave stops answering before its keys stop working, so it never takes
     // them back (review 1).
