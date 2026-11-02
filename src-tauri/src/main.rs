@@ -680,7 +680,7 @@ fn save_photo(name: String, data: String) -> bool {
     if bytes.is_empty() || bytes.len() > 20 * 1024 * 1024 {
         return false;
     }
-    let dir = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Downloads");
+    let dir = platform::home().join("Downloads");
     let path = free_path(&dir, &photo_name(&name));
     let ok = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).and_then(|mut f| std::io::Write::write_all(&mut f, &bytes)).is_ok();
     log(if ok { "photo saved to Downloads" } else { "photo not saved" });
