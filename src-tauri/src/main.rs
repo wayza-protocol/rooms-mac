@@ -1585,6 +1585,8 @@ fn main() {
                 help: Mutex::new((String::new(), None)),
             });
             app.save();
+            // Where the app found each maker's program, so a "not on this computer" can be traced from the log.
+            log(&format!("claude: {:?}; codex: {:?}", claude::find(&app.path), codex::find(&app.path)));
             let start = if app.session().is_some() {
                 WebviewUrl::External(format!("{BASE}/account/rooms").parse()?)
             } else {
