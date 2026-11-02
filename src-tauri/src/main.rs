@@ -620,14 +620,18 @@ fn codex_sign_in(h: AppHandle) {
 // waited is answered now, as the waiting card says. Watched for 15 minutes; after that the next ask finds out.
 async fn after_sign_in(h: &AppHandle, app: &Shared, gpt: bool) {
     let mark = |app: &Shared| if gpt { std::fs::metadata(app.codex_home().join("auth.json")).and_then(|m| m.modified()).map(|t| format!("{t:?}")).unwrap_or_default() } else { claude::signin_mark() };
-    let before = mark(app);
+    // Every change counts, for the whole 15 minutes: a change can come before the sign-in has finished (or from another
+    // Claude Code renewing it), and the asks it tries then fail again, so the next change tries again (fresh review 2).
+    let mut before = mark(app);
     for _ in 0..180 {
         tokio::time::sleep(Duration::from_secs(5)).await;
-        if mark(app) != before {
-            log(&format!("{} signed in again", if gpt { "Codex" } else { "Claude Code" }));
+        let now = mark(app);
+        if now != before {
+            before = now;
+            log(&format!("{} sign-in changed: answering what waited", if gpt { "Codex" } else { "Claude Code" }));
+            if gpt { &app.codex_revoked } else { &app.revoked }.store(false, std::sync::atomic::Ordering::SeqCst);
             signed_in_again(h, app).await;
             catch_up(h, app).await;
-            return;
         }
     }
 }
@@ -1182,8 +1186,17 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
     let flag = if gpt { &app.codex_revoked } else { &app.revoked };
     // It answered, so its sign-in works: a "signed out" this Mac told wayza.com before is taken back, so the strip, the
     // footer and the waiting cards go (Graham, 2 Nov 2026: they stayed after Claude answered again).
-    if r.is_ok() && flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
-        signed_in_again(h, app).await;
+    // wayza.com is asked too, not only this app's own flag: Sign in clears the flag at once, and a restart forgets it, while
+    // wayza.com still says signed out (fresh review 1).
+    if r.is_ok() {
+        let was = flag.swap(false, std::sync::atomic::Ordering::SeqCst);
+        let held = match app.session() {
+            Some(session) if !was => app.api.get("/me/active-mac", &session).await.map(|v| v["mac"] == json!(app.mac_id()) && v["signed_out"].as_array().map(|a| a.iter().any(|m| m == if gpt { "chatgpt" } else { "claude" })).unwrap_or(false)).unwrap_or(false),
+            _ => false,
+        };
+        if was || held {
+            signed_in_again(h, app).await;
+        }
     }
     if let Err(e) = r {
         // A sign-in that has ended shows as signed out (MacSignedOut1, MacSignedOutCodex1), even when the program's own
@@ -1590,31 +1603,32 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
         // Its sign-in has ended: nothing goes in the room. The ask stays waiting, the room shows it waiting for the sign-in
         // (DeskRoom6), and it is answered once you sign in again (after_sign_in).
         Err(e) if signed_out => {
-            // A bubble already open (the sign-in ended mid-answer) is closed, as an empty turn's is.
+            // A bubble already open (the sign-in ended mid-answer) can't be left hanging; it answers the ask, so it says
+            // plainly what happened and what to do. Rare: a sign-in that ended almost always fails before any words.
             if mid.is_some() {
-                let _ = say("…".to_string()).await;
+                let _ = say(format!("My {} sign-in ended before I finished. Ask me again once it's back.", if gpt { "ChatGPT" } else { "Claude" })).await;
             }
             Err(e)
         }
         // Anything else: the room is told what happened and what to do, never only that it failed.
         Err(e) => {
-            let _ = say(failed_words(gpt, &app.mac_name, &e.to_string())).await;
+            let _ = say(failed_words(gpt, &e.to_string())).await;
             Err(e)
         }
     }
 }
 
 // What an AI says in the room when its turn fails for a reason other than its sign-in: what went wrong, in words the room
-// can act on. The full reason goes to the log.
-fn failed_words(gpt: bool, mac: &str, why: &str) -> String {
+// can act on. Never which computer it runs on: the whole room reads it (fresh review 5). The full reason goes to the log.
+fn failed_words(gpt: bool, why: &str) -> String {
     let (maker, program) = if gpt { ("ChatGPT", "Codex") } else { ("Claude", "Claude Code") };
     let low = why.to_lowercase();
-    if low.contains("overloaded") || why.contains("API Error: 529") {
-        format!("{maker} is too busy to answer right now. Ask me again in a minute.")
-    } else if low.contains("usage limit") || low.contains("limit reached") || low.contains("rate_limit") || low.contains("rate limit") {
+    if low.contains("usage limit") {
         format!("I've reached this account's {maker} usage limit, so I can't answer until it resets.")
+    } else if low.contains("overloaded") || why.contains("API Error: 529") || low.contains("rate_limit") || low.contains("rate limit") || why.contains("API Error: 429") {
+        format!("{maker} is too busy to answer right now. Ask me again in a minute.")
     } else {
-        format!("Something went wrong with {program} on {mac}, so I couldn't answer. Ask me again.")
+        format!("Something went wrong with {program}, so I couldn't answer. Ask me again.")
     }
 }
 
@@ -1800,9 +1814,10 @@ mod tests {
 
     #[test]
     fn a_failed_turn_says_what_happened_and_what_to_do() {
-        assert_eq!(failed_words(false, "Graham's Mac Studio", "API Error: 529 Overloaded"), "Claude is too busy to answer right now. Ask me again in a minute.");
-        assert_eq!(failed_words(false, "Graham's Mac Studio", "Claude AI usage limit reached|1793640000"), "I've reached this account's Claude usage limit, so I can't answer until it resets.");
-        assert_eq!(failed_words(true, "Graham's Mac Studio", "Codex stopped: boom"), "Something went wrong with Codex on Graham's Mac Studio, so I couldn't answer. Ask me again.");
+        assert_eq!(failed_words(false, "API Error: 529 Overloaded"), "Claude is too busy to answer right now. Ask me again in a minute.");
+        assert_eq!(failed_words(false, r#"API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}"#), "Claude is too busy to answer right now. Ask me again in a minute.");
+        assert_eq!(failed_words(false, "Claude AI usage limit reached|1793640000"), "I've reached this account's Claude usage limit, so I can't answer until it resets.");
+        assert_eq!(failed_words(true, "Codex stopped: boom"), "Something went wrong with Codex, so I couldn't answer. Ask me again.");
     }
 
     #[test]
