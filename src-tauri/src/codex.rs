@@ -25,6 +25,11 @@ pub fn find(path: &str) -> Option<PathBuf> {
     let h = PathBuf::from(std::env::var("HOME").unwrap_or_default());
     let mut places: Vec<PathBuf> = path.split(':').map(|d| PathBuf::from(d).join("codex")).collect();
     places.extend([h.join(".local/bin/codex"), h.join(".npm-global/bin/codex"), "/opt/homebrew/bin/codex".into(), "/usr/local/bin/codex".into()]);
+    // Last, the Codex the ChatGPT app for Mac carries inside itself (ChatGPT 26.1027, codex-cli 0.166, 2 Nov 2026): many
+    // people have Codex only through that app, which puts it on no PATH. One the person installed themselves comes first.
+    for apps in [PathBuf::from("/Applications"), h.join("Applications")] {
+        places.push(apps.join("ChatGPT.app/Contents/Resources/codex-cli/bin/codex"));
+    }
     places.into_iter().find(|p| p.is_file())
 }
 
