@@ -157,6 +157,9 @@ fn init_script(app: &App) -> String {
     let st = json!({ "mac": app.mac_id(), "claude": app.claude_state().as_str(), "ai": app.saved.lock().unwrap().ai.clone() });
     format!(
         r#"(function(){{
+  // A top-level page that is neither wayza.com nor the app's own first page goes back to the rooms. Tauri asks route()
+  // only about URLs the url crate can parse, and lets the rest load here (link-safety review 2, item 1).
+  if (window.top === window && location.origin !== {origin} && location.protocol !== 'tauri:') {{ location.replace({origin} + '/account/rooms'); return; }}
   if (location.origin !== {origin}) return;
   // The account pages wear the app's header here, not the website's (AppAcct1): see site-chrome.js IN_MAC.
   var mark = function () {{ var d = document.documentElement; if (d) d.classList.add('in-mac'); return !!d; }};
@@ -169,6 +172,10 @@ fn init_script(app: &App) -> String {
   document.addEventListener('wayza-signin', function () {{ inv('claude_sign_in'); }});
   document.addEventListener('wayza-use-this-mac', function () {{ inv('use_this_mac'); }});
   document.addEventListener('wayza-help', function () {{ inv('open_help'); }});
+  // A link that opens a new window (a photo in a room is one) would go nowhere, since the app opens no second window:
+  // open it in the browser instead, through open_link and its scheme rule. Only on the room pages, the ones whose
+  // capability allows open_link; a click the page already handled itself is left alone.
+  document.addEventListener('click', function (e) {{ if (e.defaultPrevented || location.pathname.indexOf('/account/rooms') !== 0) return; var a = e.target && e.target.closest ? e.target.closest('a[target=_blank][href]') : null; if (!a) return; e.preventDefault(); inv('open_link', {{ url: a.href }}); }});
   document.addEventListener('wayza-passport', function (e) {{ var d = e.detail || {{}}; inv('open_passport', {{ address: String(d.address || '') }}); }});
   document.addEventListener('wayza-notification-settings', function () {{ inv('notification_settings'); }});
   document.addEventListener('wayza-sign-out', function () {{ inv('sign_out'); }});
@@ -456,6 +463,19 @@ fn open_passport(h: AppHandle, address: String) {
     if let Some(u) = passport_url(&address) {
         let _ = h.opener().open_url(u, None::<&str>);
     }
+}
+
+// A link that would open a new window (a photo in a room) opens in the browser instead, and only if it is a web page or
+// an email address: anything else (file:, javascript:, tauri:, a URL that doesn't parse) goes nowhere.
+#[tauri::command]
+fn open_link(h: AppHandle, url: String) {
+    if let Some(u) = link_for_browser(&url) {
+        let _ = h.opener().open_url(u.as_str(), None::<&str>);
+    }
+}
+
+fn link_for_browser(s: &str) -> Option<url::Url> {
+    url::Url::parse(s).ok().filter(leaves_for_browser)
 }
 
 // A link out of the app opens in the browser (or Mail) only if it is a web page or an email address.
@@ -1044,7 +1064,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, use_this_mac, open_help, open_passport, notification_settings, sign_out])
+        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, use_this_mac, open_help, open_passport, open_link, notification_settings, sign_out])
         .setup(|a| {
             let dir = a.path().app_config_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -1150,6 +1170,20 @@ mod tests {
         for s in [format!("blob:{BASE}/x"), "blob:https://example.com/x".into(), "about:blank".into(), "file:///etc/passwd".into(),
                   "data:text/html,hi".into(), "javascript:alert(1)".into()] {
             assert_eq!(r(&s), Route::Drop, "{s}");
+        }
+    }
+
+    #[test]
+    fn a_photo_opens_in_the_browser_and_nothing_else_gets_out() {
+        let photo = format!("{BASE}/account/rooms/room_1/file/f%201");
+        assert_eq!(link_for_browser(&photo).unwrap().as_str(), photo);
+        assert!(link_for_browser("https://example.com/x.png").is_some());
+        assert!(link_for_browser("mailto:a@b.c").is_some());
+        assert!(link_for_browser("HTTPS://example.com/x").is_some());
+        assert!(link_for_browser("  https://example.com/x  ").is_some());
+        for s in ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,hi", &format!("blob:{BASE}/x"), "tauri://localhost/x",
+                  "about:blank", "vnc://host", "JAVASCRIPT:alert(1)", " javascript:x", "java\tscript:x", "x-apple.systempreferences:x", "/account/rooms/room_1/file/f", "", "https://[::1/"] {
+            assert!(link_for_browser(s).is_none(), "{s}");
         }
     }
 
