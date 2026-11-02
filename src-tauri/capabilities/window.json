@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "window",
+  "description": "On a Mac, where the window has no title bar of its own, the pages the window shows may move it by their top bars (marked data-tauri-drag-region) and zoom it on a double-click. Nothing else.",
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "remote": {
+    "urls": ["https://wayza.com/account", "https://wayza.com/account/*", "https://wayza.com/rooms/*"]
+  },
+  "permissions": ["core:window:allow-start-dragging", "core:window:allow-internal-toggle-maximize"]
+}
