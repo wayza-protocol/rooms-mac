@@ -1,4 +1,4 @@
-# Builds the Mac app on a Mac runner. With the signing secrets set (Graham adds them once, like the Worker's secrets),
+# Builds the Mac app on a Mac runner, and the Windows test build (an unsigned installer) on a Windows runner. With the signing secrets set (Graham adds them once, like the Worker's secrets),
 # the build is signed with his Developer ID and notarised; without them it is an unsigned build for trying out.
 name: Build
 on:
@@ -39,3 +39,25 @@ jobs:
         with:
           name: Wayza-mac
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  # The Windows test build (plan of 2 Nov 2026): same code, an unsigned NSIS installer for trying out on a PC.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci || npm install
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build
+        run: npx tauri build --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Wayza-windows
+          path: src-tauri/target/release/bundle/nsis/*.exe

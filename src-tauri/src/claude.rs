@@ -29,39 +29,16 @@ impl State {
     }
 }
 
-fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default())
-}
-
-// The PATH of the person's login shell: an app opened from Finder gets a bare one, and Claude Code may be installed
-// through npm or Homebrew.
-pub fn login_path() -> String {
-    std::process::Command::new("/bin/zsh")
-        .args(["-lc", "printf %s \"$PATH\""])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin".into())
-}
+pub use crate::platform::login_path;
 
 pub fn find(path: &str) -> Option<PathBuf> {
-    let h = home();
-    let mut places: Vec<PathBuf> = path.split(':').map(|d| PathBuf::from(d).join("claude")).collect();
-    places.extend([h.join(".claude/local/claude"), h.join(".local/bin/claude"), "/opt/homebrew/bin/claude".into(), "/usr/local/bin/claude".into()]);
-    places.into_iter().find(|p| p.is_file())
+    crate::platform::claude_places(path).into_iter().find(|p| p.is_file())
 }
 
-// Signed in: Claude Code keeps its sign-in in the login Keychain, or in ~/.claude/.credentials.json.
+// Signed in: Claude Code keeps its sign-in in the Mac's login Keychain, or in ~/.claude/.credentials.json (the only place
+// on Windows).
 fn signed_in() -> bool {
-    let keychain = std::process::Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    keychain || home().join(".claude/.credentials.json").is_file()
+    crate::platform::signed_in_keychain() || crate::platform::home().join(".claude").join(".credentials.json").is_file()
 }
 
 pub fn state(path: &str) -> State {
@@ -92,7 +69,7 @@ struct Caps {
 fn caps(bin: &PathBuf) -> Caps {
     static CAPS: std::sync::OnceLock<Caps> = std::sync::OnceLock::new();
     *CAPS.get_or_init(|| {
-        let help = std::process::Command::new(bin).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+        let help = crate::platform::quiet(&mut std::process::Command::new(bin)).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
         Caps { safe_mode: help.contains("--safe-mode"), permission_prompts: help.contains("--permission-prompts") }
     })
 }
@@ -134,15 +111,14 @@ pub const ROOM_TOOLS: [&str; 5] = [
     "mcp__wayza-room__room_ask_take_back",
 ];
 
-// The MCP config file for a turn pass: only the person's Mac user can read it, and it goes when the turn ends.
+// The MCP config file for a turn pass: only the person's own user on this computer can read it, and it goes when the turn ends.
 pub fn write_room_config(path: &PathBuf, base: &str, pass: &str) -> Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let cfg = json!({ "mcpServers": { "wayza-room": { "type": "http", "url": format!("{}/wayza/mcp", base.trim_end_matches('/')), "headers": { "Authorization": format!("Bearer {pass}") } } } });
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    let mut f = crate::platform::create_private(path)?;
     f.write_all(cfg.to_string().as_bytes())?;
     Ok(())
 }
@@ -151,6 +127,7 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: 
     let Some(bin) = find(path) else { bail!("Claude Code isn't on this computer.") };
     std::fs::create_dir_all(cwd)?;
     let mut cmd = Command::new(&bin);
+    crate::platform::quiet_async(&mut cmd);
     // Room tools, when wayza.com gave this turn a pass: allowed without asking, like the turn's other tools.
     let room_tools = if room.is_some() { format!(",{}", ROOM_TOOLS.join(",")) } else { String::new() };
     cmd.current_dir(cwd).env("PATH", path).args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"]);
@@ -168,7 +145,8 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: 
             if let Some(r) = room {
                 cmd.arg(format!("--mcp-config={}", r.display()));
             }
-            if let Some(h) = std::env::var_os("HOME") {
+            let h = crate::platform::home();
+            if !h.as_os_str().is_empty() {
                 cmd.arg("--add-dir").arg(h);
             }
         }
