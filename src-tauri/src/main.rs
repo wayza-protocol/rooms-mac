@@ -489,9 +489,8 @@ async fn listen(h: &AppHandle, app: &Shared, session: &str, opened: &mut bool) -
 
 // After the socket opens: whatever your Claudes were asked while the app wasn't listening (a dropped socket, a Mac
 // that slept or was off), as wayza.com keeps it: the newest unanswered ask for each Claude in each room. Each answers
-// it now, as the "wanted" event would have; asked directly, an AI always answers. A Claude already answering there is
-// left to it. An ask is done once the Claude has read it (each turn ends by marking it read on wayza.com), so it is
-// taken up once, on whichever Mac.
+// it now, as the "wanted" event would have; asked directly, an AI always answers. An ask is done once the Claude has
+// answered or read it, as wayza.com keeps it, so it is taken up once, on whichever Mac.
 async fn catch_up(h: &AppHandle, app: &Shared) {
     let held = app.held();
     if held.is_empty() {
@@ -514,9 +513,7 @@ async fn catch_up(h: &AppHandle, app: &Shared) {
         return;
     }
     for (room, ai, _) in asks {
-        if app.busy.lock().unwrap().contains_key(&format!("{ai}|{room}")) {
-            continue;
-        }
+        // A Claude already answering there takes it in its next turn (answer() notes that more came).
         log(&format!("missed ask in {room}: {ai} answers it now"));
         let (h2, app2) = (h.clone(), app.clone());
         tauri::async_runtime::spawn(async move { answer(&h2, &app2, &room, false, &ai).await });
