@@ -579,7 +579,16 @@ fn claude_sign_in(h: AppHandle) {
     let app = h.state::<Shared>();
     let Some(bin) = claude::find(&app.path) else { return };
     app.revoked.store(false, std::sync::atomic::Ordering::SeqCst); // until Claude Code says otherwise
-    let script = format!("tell application \"Terminal\"\nactivate\ndo script \"{} /login\"\nend tell", bin.display().to_string().replace('"', "\\\""));
+    // Only the sign-in, in an empty folder of the app's own: `claude auth login` where this Claude Code has it, so no chat
+    // opens and Claude Code never asks to trust the person's home folder (Graham, 2 Nov 2026: it asked to trust
+    // /Users/graham just to sign in). An older one without it gets /login, still in that empty folder.
+    let dir = app.dir.join("sign-in");
+    let _ = std::fs::create_dir_all(&dir);
+    let q = |p: &std::path::Path| format!("'{}'", p.display().to_string().replace('\'', "'\\''"));
+    let help = std::process::Command::new(&bin).args(["auth", "--help"]).env("PATH", &app.path).stdin(std::process::Stdio::null()).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let login = if help.lines().any(|l| l.trim_start().starts_with("login")) { "auth login" } else { "/login" };
+    let cmd = format!("cd {} && {} {login}", q(&dir), q(&bin));
+    let script = format!("tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell", cmd.replace('\\', "\\\\").replace('"', "\\\""));
     let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
     let (h2, app2) = (h.clone(), app.inner().clone());
     tauri::async_runtime::spawn(async move { after_sign_in(&h2, &app2, false).await });
