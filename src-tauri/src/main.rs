@@ -575,23 +575,27 @@ fn get_claude_code(h: AppHandle) {
 
 // Claude Code signs in in Terminal, with its own sign-in. The app never sees it.
 #[tauri::command]
-fn claude_sign_in(h: AppHandle) {
-    let app = h.state::<Shared>();
+async fn claude_sign_in(h: AppHandle) {
+    let app = h.state::<Shared>().inner().clone();
     let Some(bin) = claude::find(&app.path) else { return };
     app.revoked.store(false, std::sync::atomic::Ordering::SeqCst); // until Claude Code says otherwise
     // Only the sign-in, in an empty folder of the app's own: `claude auth login` where this Claude Code has it, so no chat
     // opens and Claude Code never asks to trust the person's home folder (Graham, 2 Nov 2026: it asked to trust
-    // /Users/graham just to sign in). An older one without it gets /login, still in that empty folder.
+    // /Users/graham just to sign in). An older one without it gets /login, still in that empty folder, which it may ask
+    // to trust. Asking Claude Code what it has waits 5 seconds at most and never holds up the window (fresh review).
     let dir = app.dir.join("sign-in");
     let _ = std::fs::create_dir_all(&dir);
     let q = |p: &std::path::Path| format!("'{}'", p.display().to_string().replace('\'', "'\\''"));
-    let help = std::process::Command::new(&bin).args(["auth", "--help"]).env("PATH", &app.path).stdin(std::process::Stdio::null()).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let ask = tokio::process::Command::new(&bin).args(["auth", "--help"]).env("PATH", &app.path).stdin(std::process::Stdio::null()).kill_on_drop(true).output();
+    let help = match tokio::time::timeout(Duration::from_secs(5), ask).await {
+        Ok(Ok(o)) => String::from_utf8_lossy(&o.stdout).into_owned(),
+        _ => String::new(),
+    };
     let login = if help.lines().any(|l| l.trim_start().starts_with("login")) { "auth login" } else { "/login" };
     let cmd = format!("cd {} && {} {login}", q(&dir), q(&bin));
     let script = format!("tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell", cmd.replace('\\', "\\\\").replace('"', "\\\""));
     let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
-    let (h2, app2) = (h.clone(), app.inner().clone());
-    tauri::async_runtime::spawn(async move { after_sign_in(&h2, &app2, false).await });
+    tauri::async_runtime::spawn(async move { after_sign_in(&h, &app, false).await });
 }
 
 // ---------- Codex missing or signed out for rooms (MacNoCodex1, MacSignedOutCodex1) ----------
