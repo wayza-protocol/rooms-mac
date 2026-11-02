@@ -25,7 +25,40 @@ pub fn find(path: &str) -> Option<PathBuf> {
     let h = PathBuf::from(std::env::var("HOME").unwrap_or_default());
     let mut places: Vec<PathBuf> = path.split(':').map(|d| PathBuf::from(d).join("codex")).collect();
     places.extend([h.join(".local/bin/codex"), h.join(".npm-global/bin/codex"), "/opt/homebrew/bin/codex".into(), "/usr/local/bin/codex".into()]);
-    places.into_iter().find(|p| p.is_file())
+    // Last, the Codex the ChatGPT app for Mac carries inside itself (ChatGPT 26.1027, codex-cli 0.166, 2 Nov 2026): many
+    // people have Codex only through that app, which puts it on no PATH. One the person installed themselves comes first.
+    for apps in [PathBuf::from("/Applications"), h.join("Applications")] {
+        places.push(apps.join("ChatGPT.app/Contents/Resources/codex-cli/bin/codex"));
+    }
+    // Only a Codex that runs: an npm launcher whose inner program is gone (macOS binned an old one on 2 Nov 2026) fails
+    // `codex --version`, and the next place is tried instead of offering a sign-in that can't work.
+    places.into_iter().find(|p| p.is_file() && runs(p, path))
+}
+
+// `codex --version` exits 0 within 5 seconds. PATH is passed so an npm launcher finds its node.
+fn runs(bin: &Path, path: &str) -> bool {
+    let Ok(mut child) = std::process::Command::new(bin)
+        .arg("--version")
+        .env("PATH", path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(s)) => return s.success(),
+            Ok(None) if start.elapsed() < std::time::Duration::from_secs(5) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 // Signed in for rooms: `codex login status` in the rooms' own Codex home says so (exit 0).
@@ -182,5 +215,24 @@ mod tests {
     fn login_command_quotes_paths() {
         let c = login_command(Path::new("/opt/homebrew/bin/codex"), Path::new("/Users/jo's/Library/Application Support/x"));
         assert_eq!(c, "CODEX_HOME='/Users/jo'\\''s/Library/Application Support/x' '/opt/homebrew/bin/codex' login");
+    }
+}
+
+#[cfg(test)]
+mod find_tests {
+    #[test]
+    fn skips_a_codex_that_will_not_run() {
+        let d = std::env::temp_dir().join(format!("wz-cx-{}", std::process::id()));
+        let (bad, good) = (d.join("bad"), d.join("good"));
+        for (dir, code) in [(&bad, 1), (&good, 0)] {
+            std::fs::create_dir_all(dir).unwrap();
+            let f = dir.join("codex");
+            std::fs::write(&f, format!("#!/bin/sh\nexit {code}\n")).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = format!("{}:{}:/usr/bin:/bin", bad.display(), good.display());
+        assert_eq!(super::find(&path), Some(good.join("codex")));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

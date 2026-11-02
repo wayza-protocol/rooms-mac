@@ -33,16 +33,59 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
 }
 
-// The PATH of the person's login shell: an app opened from Finder gets a bare one, and Claude Code may be installed
-// through npm or Homebrew.
+// The PATH of the person's own shell: an app opened from Finder gets a bare one, and Claude Code or Codex may be installed
+// through npm, Homebrew or a Node manager. Many set PATH only in ~/.zshrc (Herd's nvm does: Graham's Codex, 2 Nov 2026),
+// which a login shell alone never reads, so the app asks an interactive login shell too, and keeps every folder either
+// one names. The interactive one may print its own greetings, so the PATH comes between markers; it gets 5 seconds.
 pub fn login_path() -> String {
-    std::process::Command::new("/bin/zsh")
-        .args(["-lc", "printf %s \"$PATH\""])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .filter(|p| !p.is_empty())
-        .unwrap_or_else(|| "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin".into())
+    // Terminal's own order first (the interactive login shell, which reads ~/.zshrc), so the app runs the same Claude Code
+    // and Codex that typing `claude` or `codex` in Terminal runs, never a stale copy in an earlier folder. Folders only the
+    // plain login shell names come after.
+    let mut dirs: Vec<String> = Vec::new();
+    for args in [["-lic", "printf '\\n__WAYZA_PATH__%s__WAYZA_PATH__\\n' \"$PATH\""], ["-lc", "printf %s \"$PATH\""]] {
+        if let Some(out) = shell_out(&args) {
+            let p = match out.split("__WAYZA_PATH__").nth(1) {
+                Some(p) => p.to_string(),
+                None if args[0] == "-lc" => out,
+                None => continue,
+            };
+            for d in p.split(':').filter(|d| !d.is_empty()) {
+                if !dirs.iter().any(|x| x == d) {
+                    dirs.push(d.to_string());
+                }
+            }
+        }
+    }
+    if dirs.is_empty() {
+        return "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin".into();
+    }
+    dirs.join(":")
+}
+
+fn shell_out(args: &[&str; 2]) -> Option<String> {
+    use std::io::Read;
+    let mut child = std::process::Command::new("/bin/zsh")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if start.elapsed() < std::time::Duration::from_secs(5) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    Some(out)
 }
 
 pub fn find(path: &str) -> Option<PathBuf> {
