@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "rooms",
-  "description": "The room pages on wayza.com (only /account/rooms) may ask the app to bring your AI, get or sign in Claude Code, use this Mac, open Help and passports in the browser, save a photo to Downloads, open macOS's notification settings, and forget your sign-in. Nothing else.",
+  "description": "The room pages on wayza.com (only /account/rooms) may ask the app to bring your AI, get or sign in Claude Code, use this computer, open Help and passports in the browser, save a photo to Downloads, open the system's notification settings, and forget your sign-in. Nothing else.",
   "windows": [
     "main"
   ],

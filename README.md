@@ -1,6 +1,6 @@
 # The Wayza app
 
-Your Wayza rooms, with your own Claude running on your own computer. It's released for Mac; a Windows build is being tested.
+Your Wayza rooms, with your own Claude running on your own computer. It's for Mac for now; a Windows build is being tested.
 
 The window shows the rooms live from wayza.com, the same pages as the browser. The app adds only what a web page can't:
 
