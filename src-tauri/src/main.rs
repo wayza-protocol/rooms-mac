@@ -581,6 +581,8 @@ fn claude_sign_in(h: AppHandle) {
     app.revoked.store(false, std::sync::atomic::Ordering::SeqCst); // until Claude Code says otherwise
     let script = format!("tell application \"Terminal\"\nactivate\ndo script \"{} /login\"\nend tell", bin.display().to_string().replace('"', "\\\""));
     let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
+    let (h2, app2) = (h.clone(), app.inner().clone());
+    tauri::async_runtime::spawn(async move { after_sign_in(&h2, &app2, false).await });
 }
 
 // ---------- Codex missing or signed out for rooms (MacNoCodex1, MacSignedOutCodex1) ----------
@@ -600,6 +602,37 @@ fn codex_sign_in(h: AppHandle) {
     let cmd = codex::login_command(&bin, &app.codex_home());
     let script = format!("tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell", cmd.replace('\\', "\\\\").replace('"', "\\\""));
     let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
+    let (h2, app2) = (h.clone(), app.inner().clone());
+    tauri::async_runtime::spawn(async move { after_sign_in(&h2, &app2, true).await });
+}
+
+// After Sign in: once the new sign-in is on this Mac (Claude Code's Keychain entry or credentials file rewritten, the
+// rooms' Codex sign-in file rewritten), wayza.com is told, so the strip and the waiting cards go, and every ask that
+// waited is answered now, as the waiting card says. Watched for 15 minutes; after that the next ask finds out.
+async fn after_sign_in(h: &AppHandle, app: &Shared, gpt: bool) {
+    let mark = |app: &Shared| if gpt { std::fs::metadata(app.codex_home().join("auth.json")).and_then(|m| m.modified()).map(|t| format!("{t:?}")).unwrap_or_default() } else { claude::signin_mark() };
+    let before = mark(app);
+    for _ in 0..180 {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        if mark(app) != before {
+            log(&format!("{} signed in again", if gpt { "Codex" } else { "Claude Code" }));
+            signed_in_again(h, app).await;
+            catch_up(h, app).await;
+            return;
+        }
+    }
+}
+
+// The sign-in works again: the page and wayza.com hear it (only from the Mac in use, so this never takes over from
+// another Mac).
+async fn signed_in_again(h: &AppHandle, app: &Shared) {
+    push_state(h);
+    let Some(session) = app.session() else { return };
+    if !this_mac_runs_ai(app).await {
+        return;
+    }
+    let out = app.signed_out_makers();
+    let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "signed_out": out })).await;
 }
 
 // ---------- Use this Mac (MacAway2) ----------
@@ -1138,8 +1171,10 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
     // Each maker's sign-in on its own: Claude Code's for Claudes, the rooms' Codex sign-in for ChatGPTs.
     let gpt = app.is_gpt(ai);
     let flag = if gpt { &app.codex_revoked } else { &app.revoked };
-    if r.is_ok() {
-        flag.store(false, std::sync::atomic::Ordering::SeqCst);
+    // It answered, so its sign-in works: a "signed out" this Mac told wayza.com before is taken back, so the strip, the
+    // footer and the waiting cards go (Graham, 2 Nov 2026: they stayed after Claude answered again).
+    if r.is_ok() && flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        signed_in_again(h, app).await;
     }
     if let Err(e) = r {
         // A sign-in that has ended shows as signed out (MacSignedOut1, MacSignedOutCodex1), even when the program's own
@@ -1453,8 +1488,21 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
         }) => r,
         _ = refused.notified() => { stopped = true; Err(anyhow!("refused")) }
     };
+    // A sign-in error once may be another Claude Code on this Mac renewing the shared sign-in at that moment: one more
+    // try a few seconds later, which reads the Keychain afresh. Twice, and the sign-in has ended.
+    let is_signed_out = |r: &Result<claude::Run>| r.as_ref().err().map(|e| e.downcast_ref::<claude::SignedOut>().is_some()).unwrap_or(false);
+    if !stopped && is_signed_out(&result) {
+        log(&format!("sign-in error in {room}, trying once more"));
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        result = tokio::select! {
+            r = ai_run(app, gpt, &cwd, &system, &prompt, &images, tools, room_cfg.as_ref(), room_pass, resume.as_deref(), |t| {
+                let _ = tx.send(t.to_string());
+            }) => r,
+            _ = refused.notified() => { stopped = true; Err(anyhow!("refused")) }
+        };
+    }
     // A sign-in that has ended isn't a lost conversation: no second try then.
-    let signed_out = result.as_ref().err().map(|e| e.downcast_ref::<claude::SignedOut>().is_some()).unwrap_or(false);
+    let signed_out = is_signed_out(&result);
     if result.is_err() && resume.is_some() && !stopped && !signed_out {
         // The room's conversation is gone from this Mac (a new Mac, or Claude Code cleared it): start it again, with the
         // same pass, which lasts until the whole turn ends.
@@ -1530,10 +1578,34 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
             turn_read(app, room, &key, &upto, &ask_id).await;
             Ok(())
         }
-        Err(e) => {
-            let _ = say("I couldn't answer just now.".to_string()).await;
+        // Its sign-in has ended: nothing goes in the room. The ask stays waiting, the room shows it waiting for the sign-in
+        // (DeskRoom6), and it is answered once you sign in again (after_sign_in).
+        Err(e) if signed_out => {
+            // A bubble already open (the sign-in ended mid-answer) is closed, as an empty turn's is.
+            if mid.is_some() {
+                let _ = say("…".to_string()).await;
+            }
             Err(e)
         }
+        // Anything else: the room is told what happened and what to do, never only that it failed.
+        Err(e) => {
+            let _ = say(failed_words(gpt, &app.mac_name, &e.to_string())).await;
+            Err(e)
+        }
+    }
+}
+
+// What an AI says in the room when its turn fails for a reason other than its sign-in: what went wrong, in words the room
+// can act on. The full reason goes to the log.
+fn failed_words(gpt: bool, mac: &str, why: &str) -> String {
+    let (maker, program) = if gpt { ("ChatGPT", "Codex") } else { ("Claude", "Claude Code") };
+    let low = why.to_lowercase();
+    if low.contains("overloaded") || why.contains("API Error: 529") {
+        format!("{maker} is too busy to answer right now. Ask me again in a minute.")
+    } else if low.contains("usage limit") || low.contains("limit reached") || low.contains("rate_limit") || low.contains("rate limit") {
+        format!("I've reached this account's {maker} usage limit, so I can't answer until it resets.")
+    } else {
+        format!("Something went wrong with {program} on {mac}, so I couldn't answer. Ask me again.")
     }
 }
 
@@ -1715,6 +1787,13 @@ mod tests {
         let n = now_utc();
         let t = iso_secs(&n).unwrap();
         assert!((t - now_secs()).abs() <= 1, "{n}");
+    }
+
+    #[test]
+    fn a_failed_turn_says_what_happened_and_what_to_do() {
+        assert_eq!(failed_words(false, "Graham's Mac Studio", "API Error: 529 Overloaded"), "Claude is too busy to answer right now. Ask me again in a minute.");
+        assert_eq!(failed_words(false, "Graham's Mac Studio", "Claude AI usage limit reached|1793640000"), "I've reached this account's Claude usage limit, so I can't answer until it resets.");
+        assert_eq!(failed_words(true, "Graham's Mac Studio", "Codex stopped: boom"), "Something went wrong with Codex on Graham's Mac Studio, so I couldn't answer. Ask me again.");
     }
 
     #[test]
