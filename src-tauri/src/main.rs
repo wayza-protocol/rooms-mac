@@ -458,9 +458,9 @@ fn open_passport(h: AppHandle, address: String) {
     }
 }
 
-// A link out of the app opens in the browser only if it is a web page (http or https).
+// A link out of the app opens in the browser (or Mail) only if it is a web page or an email address.
 fn leaves_for_browser(u: &url::Url) -> bool {
-    matches!(u.scheme(), "http" | "https")
+    matches!(u.scheme(), "http" | "https" | "mailto")
 }
 
 // The wayza.com pages the app window shows: Rooms (and the invite links into them), records, and your account.
@@ -1040,7 +1040,7 @@ fn main() {
                     // Anything that isn't wayza.com, or the app's own first page, opens in the browser.
                     let ours = u.scheme() == "tauri" || u.origin() == url::Url::parse(BASE).unwrap().origin();
                     if !ours {
-                        // Only web links go to the browser; file:, data: and anything else are dropped.
+                        // Only web and email links leave the app; file:, data: and anything else are dropped.
                         if leaves_for_browser(u) {
                             let _ = h.opener().open_url(u.as_str(), None::<&str>);
                         }
@@ -1091,11 +1091,11 @@ mod tests {
     }
 
     #[test]
-    fn only_web_links_go_to_the_browser() {
-        for u in ["https://example.com/x", "http://example.com"] {
+    fn only_web_and_email_links_leave_the_app() {
+        for u in ["https://example.com/x", "http://example.com", "mailto:support@wayza.com"] {
             assert!(leaves_for_browser(&url::Url::parse(u).unwrap()), "{u}");
         }
-        for u in ["file:///etc/passwd", "data:text/html,hi", "javascript:alert(1)", "ftp://x/y", "smb://host/share", "x-apple.systempreferences:x", "mailto:a@b.c"] {
+        for u in ["file:///etc/passwd", "data:text/html,hi", "javascript:alert(1)", "ftp://x/y", "smb://host/share", "x-apple.systempreferences:x"] {
             assert!(!leaves_for_browser(&url::Url::parse(u).unwrap()), "{u}");
         }
     }
