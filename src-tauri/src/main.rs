@@ -173,8 +173,9 @@ fn init_script(app: &App) -> String {
   document.addEventListener('wayza-use-this-mac', function () {{ inv('use_this_mac'); }});
   document.addEventListener('wayza-help', function () {{ inv('open_help'); }});
   // A link that opens a new window (a photo in a room is one) would go nowhere, since the app opens no second window:
-  // open it in the browser instead, through open_link and its scheme rule.
-  document.addEventListener('click', function (e) {{ var a = e.target && e.target.closest ? e.target.closest('a[target=_blank][href]') : null; if (!a) return; e.preventDefault(); inv('open_link', {{ url: a.href }}); }}, true);
+  // open it in the browser instead, through open_link and its scheme rule. Only on the room pages, the ones whose
+  // capability allows open_link; a click the page already handled itself is left alone.
+  document.addEventListener('click', function (e) {{ if (e.defaultPrevented || location.pathname.indexOf('/account/rooms') !== 0) return; var a = e.target && e.target.closest ? e.target.closest('a[target=_blank][href]') : null; if (!a) return; e.preventDefault(); inv('open_link', {{ url: a.href }}); }});
   document.addEventListener('wayza-passport', function (e) {{ var d = e.detail || {{}}; inv('open_passport', {{ address: String(d.address || '') }}); }});
   document.addEventListener('wayza-notification-settings', function () {{ inv('notification_settings'); }});
   document.addEventListener('wayza-sign-out', function () {{ inv('sign_out'); }});
@@ -1166,8 +1167,10 @@ mod tests {
         assert_eq!(link_for_browser(&photo).unwrap().as_str(), photo);
         assert!(link_for_browser("https://example.com/x.png").is_some());
         assert!(link_for_browser("mailto:a@b.c").is_some());
+        assert!(link_for_browser("HTTPS://example.com/x").is_some());
+        assert!(link_for_browser("  https://example.com/x  ").is_some());
         for s in ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,hi", &format!("blob:{BASE}/x"), "tauri://localhost/x",
-                  "about:blank", "vnc://host", "x-apple.systempreferences:x", "/account/rooms/room_1/file/f", "", "https://[::1/"] {
+                  "about:blank", "vnc://host", "JAVASCRIPT:alert(1)", " javascript:x", "java\tscript:x", "x-apple.systempreferences:x", "/account/rooms/room_1/file/f", "", "https://[::1/"] {
             assert!(link_for_browser(s).is_none(), "{s}");
         }
     }
