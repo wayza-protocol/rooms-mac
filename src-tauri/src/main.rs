@@ -171,10 +171,9 @@ fn init_script(app: &App) -> String {
   document.addEventListener('wayza-signin', function () {{ inv('claude_sign_in'); }});
   document.addEventListener('wayza-use-this-mac', function () {{ inv('use_this_mac'); }});
   document.addEventListener('wayza-help', function () {{ inv('open_help'); }});
-  // A link that opens a new window (a photo in a room is one) would go nowhere, since the app opens no second window:
-  // open it in the browser instead, through open_link and its scheme rule. Only on the room pages, the ones whose
-  // capability allows open_link; a click the page already handled itself is left alone.
-  document.addEventListener('click', function (e) {{ if (e.defaultPrevented || location.pathname.indexOf('/account/rooms') !== 0) return; var a = e.target && e.target.closest ? e.target.closest('a[target=_blank][href]') : null; if (!a) return; e.preventDefault(); inv('open_link', {{ url: a.href }}); }});
+  // Save in the room's photo viewer (PhotoView3): the window takes no downloads, so the app writes the photo to Downloads.
+  document.addEventListener('wayza-save-photo', function (e) {{ var d = e.detail || {{}}, done = function (ok) {{ document.dispatchEvent(new CustomEvent('wayza-saved', {{ detail: {{ ok: ok }} }})); }};
+    Promise.resolve(inv('save_photo', {{ name: String(d.name || ''), data: String(d.data || '') }})).then(function (r) {{ done(r === true); }}, function () {{ done(false); }}); }});
   document.addEventListener('wayza-passport', function (e) {{ var d = e.detail || {{}}; inv('open_passport', {{ address: String(d.address || '') }}); }});
   document.addEventListener('wayza-notification-settings', function () {{ inv('notification_settings'); }});
   document.addEventListener('wayza-sign-out', function () {{ inv('sign_out'); }});
@@ -604,17 +603,37 @@ fn open_passport(h: AppHandle, address: String) {
     }
 }
 
-// A link that would open a new window (a photo in a room) opens in the browser instead, and only if it is a web page or
-// an email address: anything else (file:, javascript:, tauri:, a URL that doesn't parse) goes nowhere.
+// Save, from the room's photo viewer (PhotoView3): the photo the page already shows, written to ~/Downloads under the name it
+// was sent with, cleaned so it can only ever be a plain file name there; a number goes on if the name is taken.
 #[tauri::command]
-fn open_link(h: AppHandle, url: String) {
-    if let Some(u) = link_for_browser(&url) {
-        let _ = h.opener().open_url(u.as_str(), None::<&str>);
+fn save_photo(name: String, data: String) -> bool {
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()) else { return false };
+    if bytes.is_empty() || bytes.len() > 20 * 1024 * 1024 {
+        return false;
     }
+    let dir = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Downloads");
+    let path = free_path(&dir, &photo_name(&name));
+    let ok = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).and_then(|mut f| std::io::Write::write_all(&mut f, &bytes)).is_ok();
+    log(if ok { "photo saved to Downloads" } else { "photo not saved" });
+    ok
 }
 
-fn link_for_browser(s: &str) -> Option<url::Url> {
-    url::Url::parse(s).ok().filter(leaves_for_browser)
+// A sent file name made safe as one file in Downloads: no folders, no "..", no hidden or control characters, not too long.
+fn photo_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let clean: String = base.chars().filter(|c| !c.is_control() && !matches!(c, ':' | '/' | '\\')).take(120).collect();
+    let clean = clean.trim().trim_start_matches('.').trim().to_string();
+    if clean.is_empty() || clean.chars().all(|c| c == '.') { "photo".into() } else { clean }
+}
+
+// name, else "name 2.ext", "name 3.ext" and so on.
+fn free_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = match name.rfind('.') { Some(i) if i > 0 => (&name[..i], &name[i..]), _ => (name, "") };
+    (2..10000).map(|n| dir.join(format!("{stem} {n}{ext}"))).find(|p| !p.exists()).unwrap_or(first)
 }
 
 // A link out of the app opens in the browser (or Mail) only if it is a web page or an email address.
@@ -1271,7 +1290,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, use_this_mac, open_help, open_passport, open_link, notification_settings, sign_out])
+        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, use_this_mac, open_help, open_passport, save_photo, notification_settings, sign_out])
         .setup(|a| {
             let dir = a.path().app_config_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -1381,17 +1400,23 @@ mod tests {
     }
 
     #[test]
-    fn a_photo_opens_in_the_browser_and_nothing_else_gets_out() {
-        let photo = format!("{BASE}/account/rooms/room_1/file/f%201");
-        assert_eq!(link_for_browser(&photo).unwrap().as_str(), photo);
-        assert!(link_for_browser("https://example.com/x.png").is_some());
-        assert!(link_for_browser("mailto:a@b.c").is_some());
-        assert!(link_for_browser("HTTPS://example.com/x").is_some());
-        assert!(link_for_browser("  https://example.com/x  ").is_some());
-        for s in ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,hi", &format!("blob:{BASE}/x"), "tauri://localhost/x",
-                  "about:blank", "vnc://host", "JAVASCRIPT:alert(1)", " javascript:x", "java\tscript:x", "x-apple.systempreferences:x", "/account/rooms/room_1/file/f", "", "https://[::1/"] {
-            assert!(link_for_browser(s).is_none(), "{s}");
-        }
+    fn a_saved_photo_stays_one_plain_file_in_downloads() {
+        assert_eq!(photo_name("beach.jpg"), "beach.jpg");
+        assert_eq!(photo_name("../../.ssh/authorized_keys"), "authorized_keys");
+        assert_eq!(photo_name("..\\..\\x.png"), "x.png");
+        assert_eq!(photo_name(".hidden.png"), "hidden.png");
+        assert_eq!(photo_name(".."), "photo");
+        assert_eq!(photo_name(""), "photo");
+        assert_eq!(photo_name("a\nb:c.png"), "abc.png");
+        assert_eq!(photo_name(&"x".repeat(300)).len(), 120);
+        let dir = std::env::temp_dir().join(format!("wz-photo-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(free_path(&dir, "a.png"), dir.join("a.png"));
+        std::fs::write(dir.join("a.png"), b"x").unwrap();
+        assert_eq!(free_path(&dir, "a.png"), dir.join("a 2.png"));
+        std::fs::write(dir.join("noext"), b"x").unwrap();
+        assert_eq!(free_path(&dir, "noext"), dir.join("noext 2"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
