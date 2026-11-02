@@ -9,7 +9,7 @@ on:
 
 jobs:
   mac:
-    runs-on: macos-14
+    runs-on: macos-15  # macos-14 images retire on 2 Nov 2026 (actions/runner-images#13518)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,6 +22,8 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci || npm install
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build (signed when the secrets are set)
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

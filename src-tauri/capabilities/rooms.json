@@ -1,8 +1,24 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "rooms",
-  "description": "The room pages on wayza.com (only /account/rooms) may ask the app to bring your AI, get or sign in Claude Code, and use this Mac. Nothing else.",
-  "windows": ["main"],
-  "remote": { "urls": ["https://wayza.com/account/rooms*"] },
-  "permissions": ["allow-bring", "allow-get-claude-code", "allow-claude-sign-in", "allow-use-this-mac"]
+  "description": "The room pages on wayza.com (only /account/rooms) may ask the app to bring your AI, get or sign in Claude Code, use this Mac, open Help, passports and photos in the browser, open macOS's notification settings, and forget your sign-in. Nothing else.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "https://wayza.com/account/rooms*"
+    ]
+  },
+  "permissions": [
+    "allow-bring",
+    "allow-get-claude-code",
+    "allow-claude-sign-in",
+    "allow-use-this-mac",
+    "allow-open-help",
+    "allow-open-passport",
+    "allow-open-link",
+    "allow-notification-settings",
+    "allow-sign-out"
+  ]
 }

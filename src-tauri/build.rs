@@ -3,7 +3,7 @@
 // allow it (tauri 2.12, webview/mod.rs).
 fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&["sign_in", "bring", "get_claude_code", "claude_sign_in", "use_this_mac"]),
+        tauri_build::AppManifest::new().commands(&["sign_in", "bring", "get_claude_code", "claude_sign_in", "use_this_mac", "open_help", "open_passport", "open_link", "notification_settings", "sign_out"]),
     ))
     .expect("tauri build");
 }
