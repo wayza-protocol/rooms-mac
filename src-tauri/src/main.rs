@@ -520,6 +520,14 @@ async fn catch_up(h: &AppHandle, app: &Shared) {
     }
 }
 
+// A turn is over: the AI has read what it was shown (upto) and the ask it took, also when that ask came after a message
+// still being written and it answered with a tap. A message that later asks it is unread again (wayza.com's roomEdit).
+async fn turn_read(app: &Shared, room: &str, key: &str, upto: &Option<String>, ask: &Option<String>) {
+    for m in [upto, ask].into_iter().flatten() {
+        mark_read(app, room, key, m).await;
+    }
+}
+
 // The AI has read the room up to this message (POST /rooms/{id}/read with its own key).
 async fn mark_read(app: &Shared, room: &str, key: &str, up_to: &str) {
     if let Err(e) = app.api.post(&format!("/rooms/{}/read", enc(room)), Some(key), json!({ "up_to": up_to })).await {
@@ -913,9 +921,7 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
             })
             .collect();
         if lines.is_empty() {
-            if let Some(last) = &upto {
-                mark_read(app, room, &key, last).await;
-            }
+            turn_read(app, room, &key, &upto, &ask_id).await;
             return Ok(());
         }
         // Whose ask this is: the person's alone only when every new message Claude is shown is theirs. One line from anyone
@@ -1106,9 +1112,7 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
         let _ = pusher.await;
         end_pass(app, room, &key, pass).await;
         // What it was shown is read all the same, so the same ask never runs another turn.
-        if let Some(last) = &upto {
-            mark_read(app, room, &key, last).await;
-        }
+        turn_read(app, room, &key, &upto, &ask_id).await;
         return Ok(());
     }
     let mid = pusher.await.ok().flatten();
@@ -1116,13 +1120,14 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
     // Claude's words: in the bubble it opened, or a message of their own if they came all at once at the end.
     let open = &mid;
     let key_say = key.clone();
+    let asked = &ask_id;
     let say = |text: String| async move {
         let key = key_say;
         match open {
             Some(id) => app.api.patch(&format!("/rooms/{}/messages/{}", enc(room), enc(id)), &key, json!({ "text": text, "done": true })).await.map(|_| Some(id.clone())),
             None => {
                 let mut b = json!({ "text": text });
-                if let Some(a) = &ask_id {
+                if let Some(a) = asked {
                     b["reply_to"] = json!(a);
                 }
                 app.api.post(&format!("/rooms/{}/messages", enc(room)), Some(&key), b).await.map(|p| p["id"].as_str().map(str::to_string))
@@ -1146,9 +1151,7 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
                 // same, so the same ask never runs another turn. A person speaking asks again.
                 Err(e) if e.to_string().ends_with("(403)") || e.to_string().ends_with("(409)") => {
                     log(&format!("answer not posted in {room}: {e}"));
-                    if let Some(last) = &upto {
-                        mark_read(app, room, &key, last).await;
-                    }
+                    turn_read(app, room, &key, &upto, &ask_id).await;
                     return Ok(());
                 }
                 Err(e) => return Err(e),
@@ -1166,9 +1169,7 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
             // The turn is done: wayza.com marks what it was shown read (up to `upto`, never its own answer, so an ask
             // that came while it was writing is still waiting), and the ask isn't handed over again on any Mac, even
             // when it answered with a tap and posted nothing.
-            if let Some(last) = &upto {
-                mark_read(app, room, &key, last).await;
-            }
+            turn_read(app, room, &key, &upto, &ask_id).await;
             Ok(())
         }
         Err(e) => {
