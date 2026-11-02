@@ -159,34 +159,6 @@ fn init_script(app: &App) -> String {
   // A top-level page that is neither wayza.com nor the app's own first page goes back to the rooms. Tauri asks route()
   // only about URLs the url crate can parse, and lets the rest load here (link-safety review 2, item 1).
   if (window.top === window && location.origin !== {origin} && location.protocol !== 'tauri:') {{ location.replace({origin} + '/account/rooms'); return; }}
-  // The window has no title bar of its own (Overlay): the page's top bar is where you move it, as in any Mac app.
-  // A press on an empty part of the bar drags the window, a double-click zooms it; anything you can click, or that
-  // shows a pointing hand, stays a click. The bar is 72px on the room pages and 64px on the rest (room-style.js .rh/.ph,
-  // site.css .top). Only the top page; the drag needs core:window:allow-start-dragging (capabilities/window.json).
-  if (window.top === window) {{
-    var barH = function () {{ return location.pathname.indexOf('/account/rooms') === 0 ? 72 : 64; }};
-    var onBar = function (e) {{
-      if (e.button !== 0 || e.clientY >= barH()) return false;
-      for (var el = e.target; el && el.nodeType === 1; el = el.parentElement) {{
-        if (/^(A|BUTTON|INPUT|SELECT|TEXTAREA|LABEL|SUMMARY|OPTION|VIDEO|AUDIO|IFRAME)$/.test(el.tagName) || el.isContentEditable || el.hasAttribute('role') || (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1')) return false;
-        if (getComputedStyle(el).cursor === 'pointer') return false;
-      }}
-      return true;
-    }};
-    var winInv = function (c) {{ try {{ window.__TAURI_INTERNALS__.invoke('plugin:window|' + c); }} catch (x) {{}} }};
-    var dx = -1, dy = -1;
-    document.addEventListener('mousedown', function (e) {{
-      if (e.defaultPrevented || !onBar(e)) return;
-      if (e.detail === 2) {{ dx = e.clientX; dy = e.clientY; return; }} // macOS zooms on the second click's release
-      if (e.detail !== 1) return;
-      e.preventDefault();
-      winInv('start_dragging');
-    }});
-    document.addEventListener('mouseup', function (e) {{
-      if (e.detail === 2 && e.clientX === dx && e.clientY === dy && onBar(e)) winInv('internal_toggle_maximize');
-      dx = dy = -1;
-    }});
-  }}
   if (location.origin !== {origin}) return;
   // The account pages wear the app's header here, not the website's (AppAcct1): see site-chrome.js IN_MAC.
   var mark = function () {{ var d = document.documentElement; if (d) d.classList.add('in-mac'); return !!d; }};
