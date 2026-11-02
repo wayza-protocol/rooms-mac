@@ -22,6 +22,8 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci || npm install
+      - name: Unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build (signed when the secrets are set)
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
