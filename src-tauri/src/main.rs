@@ -169,7 +169,7 @@ fn init_script(app: &App) -> String {
   document.addEventListener('wayza-bring', function (e) {{ var d = e.detail || {{}}; inv('bring', {{ maker: d.maker || 'claude', room: d.room || null, ai: d.ai || null, ais: Array.isArray(d.ais) ? d.ais : null, newAi: d.new_ai || null }}); }});
   document.addEventListener('wayza-get-claude-code', function () {{ inv('get_claude_code'); }});
   document.addEventListener('wayza-signin', function () {{ inv('claude_sign_in'); }});
-  document.addEventListener('wayza-use-this-mac', function () {{ inv('use_this_mac'); }});
+  document.addEventListener('wayza-use-this-mac', function (e) {{ var d = e.detail || {{}}; inv('use_this_mac', {{ ai: d.ai || null, ais: Array.isArray(d.ais) ? d.ais : null }}); }});
   document.addEventListener('wayza-help', function () {{ inv('open_help'); }});
   // A link that opens a new window (a photo in a room is one) would go nowhere, since the app opens no second window:
   // open it in the browser instead, through open_link and its scheme rule. Only on the room pages, the ones whose
@@ -284,6 +284,9 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
     }
     // Asked once: after a yes, the AI's key is in the Keychain and bringing it to another room needs no page.
     let held = app.saved.lock().unwrap().ai.clone();
+    // A new key here means the old one stops working wherever else it was, so this Mac becomes the one in use, as the
+    // sheet says ("They all answer from this computer"). Before, the other Mac stayed in use with a key that no longer
+    // worked, and nobody answered (Graham, 2 Nov 2026).
     if app.ai_key().is_none() || held.is_none() || (want.is_some() && want != held) {
         let p = auth::pkce();
         let state = auth::random(24);
@@ -299,14 +302,19 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
         app.saved.lock().unwrap().rooms.clear(); // the old Claude's conversations were its own
         app.save();
         push_state(h);
+        if let Some(session) = app.session() {
+            in_use_here(&app, &session).await?;
+        }
     }
     let (Some(room), Some(session), Some(first)) = (room, app.session(), app.saved.lock().unwrap().ai.clone()) else { return Ok(()) };
     // Which Claudes come in: the ticked ones, getting a key for each the app doesn't run yet, and a new one if asked for.
     let mut bring: Vec<String> = Vec::new();
+    let mut moved = false;
     for a in ais.iter().filter(|a| a.len() <= 200) {
         if !app.held().contains(a) {
             let t = app.api.post("/mac/ais", Some(&session), json!({ "address": a })).await?;
             hold_more(&app, &t)?;
+            moved = true;
         }
         bring.push(a.clone());
     }
@@ -315,6 +323,9 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
         if let Some(a) = hold_more(&app, &t)? {
             bring.push(a);
         }
+    }
+    if moved {
+        in_use_here(&app, &session).await?;
     }
     if bring.is_empty() && ais.is_empty() {
         bring.push(first);
@@ -331,18 +342,20 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
 
 // A new key for one of the other Claudes this app runs. When wayza.com says it isn't yours any more, the app stops
 // running it.
+// The first Claude too, but only on the Mac in use: the Mac it moved away from never takes it back by itself.
 async fn rekey(app: &Shared, ai: &str) -> bool {
-    if app.saved.lock().unwrap().ai.as_deref() == Some(ai) || !app.held().iter().any(|a| a == ai) {
+    let first = app.saved.lock().unwrap().ai.as_deref() == Some(ai);
+    if !app.held().iter().any(|a| a == ai) || (first && !this_mac_runs_ai(app).await) {
         return false;
     }
     let Some(session) = app.session() else { return false };
     match app.api.post("/mac/ais", Some(&session), json!({ "address": ai })).await {
         Ok(t) => {
             log(&format!("{ai} had a new key somewhere else; got one again"));
-            hold_more(app, &t).is_ok()
+            if first { hold_first(app, &t).is_ok() } else { hold_more(app, &t).is_ok() }
         }
         Err(e) => {
-            if e.to_string().ends_with("(403)") {
+            if !first && e.to_string().ends_with("(403)") {
                 app.saved.lock().unwrap().more.retain(|a| a != ai);
                 auth::forget(&format!("ai:{ai}"));
                 app.save();
@@ -366,6 +379,32 @@ fn hold_more(app: &Shared, t: &Value) -> Result<Option<String>> {
     Ok(Some(addr.to_string()))
 }
 
+// Your first Claude's key, from wayza.com's answer, into the Keychain: the one the app runs first. A different Claude
+// from the one it ran before starts its rooms' conversations afresh, as Bring does.
+fn hold_first(app: &Shared, t: &Value) -> Result<String> {
+    let (Some(addr), Some(key)) = (t["address"].as_str(), t["key"].as_str()) else { return Err(anyhow!("no key")) };
+    auth::keep("ai:claude", key)?;
+    let mut s = app.saved.lock().unwrap();
+    if s.ai.as_deref() != Some(addr) {
+        s.ai = Some(addr.to_string());
+        s.rooms.clear();
+    }
+    if s.more.iter().any(|a| a == addr) {
+        s.more.retain(|a| a != addr);
+        auth::forget(&format!("ai:{addr}"));
+    }
+    drop(s);
+    app.save();
+    Ok(addr.to_string())
+}
+
+// This Mac is the one in use: your Claudes answer from here, and the other Mac stops.
+async fn in_use_here(app: &Shared, session: &str) -> Result<()> {
+    let signed_out: Vec<&str> = if app.claude_state() == claude::State::SignedOut { vec!["claude"] } else { vec![] };
+    app.api.put("/me/active-mac", session, json!({ "mac": app.mac_id(), "name": app.mac_name, "state": "on", "signed_out": signed_out })).await?;
+    Ok(())
+}
+
 // ---------- Claude Code missing or signed out (MacNoClaude1, MacSignedOut1) ----------
 
 #[tauri::command]
@@ -386,14 +425,29 @@ fn claude_sign_in(h: AppHandle) {
 // ---------- Use this Mac (MacAway2) ----------
 
 #[tauri::command]
-async fn use_this_mac(h: AppHandle) -> Result<(), String> {
+// ai: your Claude, as the room page knows it; ais: your other Claudes the Wayza app runs. This Mac takes their keys,
+// whether it ran them before or never did: the Mac they move from may hold newer keys by now, and a Mac that never ran
+// them has none (Graham, 2 Nov 2026: the strip shows on every Mac that isn't the one in use). The keys the other Mac had
+// stop working, so only this Mac answers from now on.
+async fn use_this_mac(h: AppHandle, ai: Option<String>, ais: Option<Vec<String>>) -> Result<(), String> {
     let app = h.state::<Shared>().inner().clone();
     let session = app.session().ok_or("Sign in first.")?;
-    let signed_out: Vec<&str> = if app.claude_state() == claude::State::SignedOut { vec!["claude"] } else { vec![] };
-    app.api
-        .put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "state": "on", "signed_out": signed_out }))
-        .await
-        .map_err(|e| e.to_string())?;
+    let want = ai.filter(|a| !a.is_empty() && a.len() <= 200).or_else(|| app.saved.lock().unwrap().ai.clone());
+    if let Some(a) = want {
+        let t = app.api.post("/mac/ais", Some(&session), json!({ "address": a })).await.map_err(|e| e.to_string())?;
+        let got = hold_first(&app, &t).map_err(|e| e.to_string())?;
+        log(&format!("use this Mac: runs {got} here now"));
+    }
+    for a in ais.unwrap_or_default().iter().filter(|a| !a.is_empty() && a.len() <= 200).take(20) {
+        match app.api.post("/mac/ais", Some(&session), json!({ "address": a })).await {
+            Ok(t) => {
+                let _ = hold_more(&app, &t);
+            }
+            Err(e) => log(&format!("use this Mac: {a} not taken: {e}")),
+        }
+    }
+    push_state(&h);
+    in_use_here(&app, &session).await.map_err(|e| e.to_string())?;
     // Asks that came while the other Mac ran your Claudes (or none did) are answered here now.
     {
         let (h2, app2) = (h.clone(), app.clone());
