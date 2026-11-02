@@ -162,7 +162,9 @@ pub async fn run(path: &str, home: &Path, cwd: &PathBuf, system: &str, prompt: &
     for f in &files {
         cmd.arg("-i").arg(f);
     }
-    cmd.arg(words).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    // `--` ends the options: `-i` takes any number of files, so without it the prompt was read as one more photo and Codex
+    // stopped with "No prompt provided via stdin" in any room with a photo in view (Graham, 2 Nov 2026).
+    cmd.arg("--").arg(words).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let out = run_child(cmd).await;
     for f in files {
         let _ = std::fs::remove_file(f);
