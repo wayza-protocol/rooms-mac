@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bring"
+description = "Enables the bring command without any pre-configured scope."
+commands.allow = ["bring"]
+
+[[permission]]
+identifier = "deny-bring"
+description = "Denies the bring command without any pre-configured scope."
+commands.deny = ["bring"]

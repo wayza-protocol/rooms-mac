@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-use-this-mac"
+description = "Enables the use_this_mac command without any pre-configured scope."
+commands.allow = ["use_this_mac"]
+
+[[permission]]
+identifier = "deny-use-this-mac"
+description = "Denies the use_this_mac command without any pre-configured scope."
+commands.deny = ["use_this_mac"]
