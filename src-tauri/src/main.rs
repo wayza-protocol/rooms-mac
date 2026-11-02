@@ -463,6 +463,38 @@ fn leaves_for_browser(u: &url::Url) -> bool {
     matches!(u.scheme(), "http" | "https" | "mailto")
 }
 
+#[derive(Debug, PartialEq)]
+enum Route {
+    Window,  // stays in the app window
+    Browser, // opens in the browser (or Mail)
+    SignIn,  // the window's sign-in ended: sign in in the browser instead
+    Drop,    // goes nowhere
+}
+
+// Where a navigation in the app window goes. The window keeps the app's own first page and wayza.com's Rooms and
+// account pages. wayza.com's sign-in page means the window's sign-in ended, so sign in in the browser instead (Google
+// won't sign in inside an app's window). Any other wayza.com page, and any other web or email link, opens outside;
+// everything else (file:, data:, blob:, javascript:, about:) is dropped. Only a URL whose own scheme is wayza.com's
+// counts as wayza.com: a blob: URL shares wayza.com's origin but isn't a page of it.
+fn route(u: &url::Url) -> Route {
+    if u.scheme() == "tauri" {
+        return Route::Window;
+    }
+    let base = url::Url::parse(BASE).unwrap();
+    let ours = u.scheme() == base.scheme() && u.origin() == base.origin();
+    if ours && u.as_str().starts_with(&format!("{BASE}/account/signin")) {
+        return Route::SignIn;
+    }
+    if ours && in_window(u.path()) {
+        return Route::Window;
+    }
+    if leaves_for_browser(u) {
+        Route::Browser
+    } else {
+        Route::Drop
+    }
+}
+
 // The wayza.com pages the app window shows: Rooms (and the invite links into them), records, and your account.
 fn in_window(path: &str) -> bool {
     path == "/account" || ["/account/", "/rooms/", "/records/"].iter().any(|p| path.starts_with(p))
@@ -1036,30 +1068,20 @@ fn main() {
                 .initialization_script(&init_script(&app))
                 // wayza.com's own sign-in page in the app window means the window's sign-in ended: sign in in the
                 // browser instead (Google won't sign in inside an app's window).
-                .on_navigation(move |u| {
-                    // Anything that isn't wayza.com, or the app's own first page, opens in the browser.
-                    let ours = u.scheme() == "tauri" || u.origin() == url::Url::parse(BASE).unwrap().origin();
-                    if !ours {
-                        // Only web and email links leave the app; file:, data: and anything else are dropped.
-                        if leaves_for_browser(u) {
-                            let _ = h.opener().open_url(u.as_str(), None::<&str>);
-                        }
-                        return false;
+                .on_navigation(move |u| match route(u) {
+                    Route::Window => true,
+                    Route::Browser => {
+                        let _ = h.opener().open_url(u.as_str(), None::<&str>);
+                        false
                     }
-                    if u.as_str().starts_with(&format!("{BASE}/account/signin")) {
+                    Route::SignIn => {
                         let h = h.clone();
                         tauri::async_runtime::spawn(async move {
                             let _ = do_sign_in(&h).await;
                         });
-                        return false;
+                        false
                     }
-                    // The window is for Rooms and your account. Any other wayza.com page (the home page, Docs, the
-                    // Commons) opens in the browser, so the website never takes the place of the room.
-                    if u.scheme() != "tauri" && !in_window(u.path()) {
-                        let _ = h.opener().open_url(u.as_str(), None::<&str>);
-                        return false;
-                    }
-                    true
+                    Route::Drop => false,
                 })
                 .build()?;
             let h = a.handle().clone();
@@ -1097,6 +1119,25 @@ mod tests {
         }
         for u in ["file:///etc/passwd", "data:text/html,hi", "javascript:alert(1)", "ftp://x/y", "smb://host/share", "x-apple.systempreferences:x"] {
             assert!(!leaves_for_browser(&url::Url::parse(u).unwrap()), "{u}");
+        }
+    }
+
+    #[test]
+    fn every_navigation_goes_where_it_should() {
+        let r = |s: &str| route(&url::Url::parse(s).unwrap());
+        assert_eq!(r("tauri://localhost/index.html"), Route::Window);
+        assert_eq!(r(&format!("{BASE}/account/reach")), Route::Window);
+        assert_eq!(r(&format!("{BASE}/account/rooms/room_1")), Route::Window);
+        assert_eq!(r(&format!("{BASE}/rooms/join/abc")), Route::Window);
+        assert_eq!(r(&format!("{BASE}/account/signin?x=1")), Route::SignIn);
+        assert_eq!(r(&format!("{BASE}/")), Route::Browser);
+        assert_eq!(r(&format!("{BASE}/docs/")), Route::Browser);
+        assert_eq!(r("https://example.com/x"), Route::Browser);
+        assert_eq!(r("  HTTPS://example.com/x"), Route::Browser);
+        assert_eq!(r("MAILTO:a@b.c"), Route::Browser);
+        for s in [format!("blob:{BASE}/x"), "blob:https://example.com/x".into(), "about:blank".into(), "file:///etc/passwd".into(),
+                  "data:text/html,hi".into(), "javascript:alert(1)".into()] {
+            assert_eq!(r(&s), Route::Drop, "{s}");
         }
     }
 
