@@ -558,7 +558,8 @@ async fn on_event(h: &AppHandle, app: &Shared, ev: Value) {
             }
             badge(h, app).await;
         }
-        Some("member") | Some("left") | Some("room") => badge(h, app).await,
+        // "read": you read a room, on this Mac or anywhere else, so the Dock drops it at once.
+        Some("member") | Some("left") | Some("room") | Some("read") => badge(h, app).await,
         _ => {}
     }
 }
@@ -612,11 +613,22 @@ fn banner(h: &AppHandle, title: &str, body: &str) {
     let _ = h.notification().builder().title(title).body(body).show();
 }
 
-// The Dock: how many rooms have something unread.
+// The Dock: how many rooms have something unread. Each event recounts on its own, so two counts can be asked for at
+// once and come back in either order: only the one asked for last is shown, so an older count never puts back a "1"
+// that reading the room has just taken away.
+static BADGE_ASKED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static BADGE_SHOWN: Mutex<u64> = Mutex::new(0);
+
 async fn badge(h: &AppHandle, app: &Shared) {
     let Some(session) = app.session() else { return };
+    let asked = BADGE_ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     let Ok(v) = app.api.get("/rooms", &session).await else { return };
     let n = v["rooms"].as_array().map(|a| a.iter().filter(|r| r["unread"].as_i64().unwrap_or(0) > 0).count()).unwrap_or(0);
+    let mut shown = BADGE_SHOWN.lock().unwrap();
+    if asked < *shown {
+        return; // a count asked for later is already on the Dock
+    }
+    *shown = asked;
     if let Some(w) = window(h) {
         let _ = w.set_badge_count(if n > 0 { Some(n as i64) } else { None });
     }
