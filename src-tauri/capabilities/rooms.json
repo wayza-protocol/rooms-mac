@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "rooms",
-  "description": "The room pages on wayza.com (only /account/rooms) may ask the app to bring your AI, get or sign in Claude Code, use this Mac, open Help and passports in the browser, save a photo to Downloads, open macOS's notification settings, and forget your sign-in. Nothing else.",
+  "description": "The room pages on wayza.com (only /account/rooms) may ask the app to bring your AI, get or sign in Claude Code or Codex, use this Mac, open Help and passports in the browser, save a photo to Downloads, open macOS's notification settings, and forget your sign-in. Nothing else.",
   "windows": [
     "main"
   ],
@@ -14,6 +14,8 @@
     "allow-bring",
     "allow-get-claude-code",
     "allow-claude-sign-in",
+    "allow-get-codex",
+    "allow-codex-sign-in",
     "allow-use-this-mac",
     "allow-open-help",
     "allow-open-passport",
