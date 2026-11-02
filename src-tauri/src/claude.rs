@@ -38,8 +38,11 @@ fn home() -> PathBuf {
 // which a login shell alone never reads, so the app asks an interactive login shell too, and keeps every folder either
 // one names. The interactive one may print its own greetings, so the PATH comes between markers; it gets 5 seconds.
 pub fn login_path() -> String {
+    // Terminal's own order first (the interactive login shell, which reads ~/.zshrc), so the app runs the same Claude Code
+    // and Codex that typing `claude` or `codex` in Terminal runs, never a stale copy in an earlier folder. Folders only the
+    // plain login shell names come after.
     let mut dirs: Vec<String> = Vec::new();
-    for args in [["-lc", "printf %s \"$PATH\""], ["-lic", "printf '\\n__WAYZA_PATH__%s__WAYZA_PATH__\\n' \"$PATH\""]] {
+    for args in [["-lic", "printf '\\n__WAYZA_PATH__%s__WAYZA_PATH__\\n' \"$PATH\""], ["-lc", "printf %s \"$PATH\""]] {
         if let Some(out) = shell_out(&args) {
             let p = match out.split("__WAYZA_PATH__").nth(1) {
                 Some(p) => p.to_string(),
