@@ -7,6 +7,7 @@
 mod api;
 mod auth;
 mod claude;
+mod platform;
 
 use base64::Engine as _;
 use anyhow::{anyhow, Result};
@@ -141,14 +142,7 @@ impl App {
 }
 
 fn mac_name() -> String {
-    std::process::Command::new("/usr/sbin/scutil")
-        .args(["--get", "ComputerName"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().chars().filter(|c| !c.is_control() && *c != '<' && *c != '>').take(60).collect::<String>())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "this Mac".into())
+    platform::computer_name().unwrap_or_else(|| "this Mac".into())
 }
 
 // window.wayzaMac, which the room page reads (room-pages.js APP), and the page's events, turned into the app's commands.
@@ -183,11 +177,11 @@ fn init_script(app: &App) -> String {
     )
 }
 
-// What the app did, one line each, in ~/Library/Logs/Wayza/wayza.log: no message text, no keys. For finding out why
+// What the app did, one line each, in wayza.log (Mac: ~/Library/Logs/Wayza; Windows: %LOCALAPPDATA%\Wayza\Logs): no message text, no keys. For finding out why
 // Claude didn't answer (Graham's first run, 1 Nov 2026). Kept under about 1 MB.
 fn log(line: &str) {
     use std::io::Write;
-    let dir = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Library/Logs/Wayza");
+    let dir = platform::log_dir();
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("wayza.log");
     if std::fs::metadata(&path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
@@ -438,8 +432,7 @@ fn claude_sign_in(h: AppHandle) {
     let app = h.state::<Shared>();
     let Some(bin) = claude::find(&app.path) else { return };
     app.revoked.store(false, std::sync::atomic::Ordering::SeqCst); // until Claude Code says otherwise
-    let script = format!("tell application \"Terminal\"\nactivate\ndo script \"{} /login\"\nend tell", bin.display().to_string().replace('"', "\\\""));
-    let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
+    platform::open_sign_in(&bin);
 }
 
 // ---------- Use this Mac (MacAway2) ----------
@@ -768,7 +761,7 @@ fn passport_url(address: &str) -> Option<String> {
 #[tauri::command]
 fn notification_settings(h: AppHandle) {
     let id = h.config().identifier.clone();
-    let _ = h.opener().open_url(format!("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={id}"), None::<&str>);
+    let _ = h.opener().open_url(platform::notification_settings_url(&id), None::<&str>);
 }
 
 // Signing out from the menu: the page has already ended the window's session on wayza.com. The app first tells
@@ -1393,12 +1386,11 @@ fn main() {
                 WebviewUrl::App("index.html".into())
             };
             let h = a.handle().clone();
-            let w = WebviewWindowBuilder::new(a, "main", start)
-                .title("Wayza")
-                .inner_size(1440.0, 900.0)
-                .min_inner_size(1024.0, 640.0)
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .hidden_title(true)
+            let w = WebviewWindowBuilder::new(a, "main", start).title("Wayza").inner_size(1440.0, 900.0).min_inner_size(1024.0, 640.0);
+            // Mac: the room header sits beside the window buttons. Windows: its own title bar.
+            #[cfg(target_os = "macos")]
+            let w = w.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+            let w = w
                 .initialization_script(&init_script(&app))
                 // wayza.com's own sign-in page in the app window means the window's sign-in ended: sign in in the
                 // browser instead (Google won't sign in inside an app's window).
