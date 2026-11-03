@@ -116,7 +116,27 @@ pub fn state(path: &str) -> State {
 }
 
 // Claude Code's sign-in has ended (revoked, expired): it says so only when asked to answer. `claude auth status` can
-// still say loggedIn.
+// still say loggedIn. Only its own words for that count: a bare "401" also turns up inside other errors' request ids.
+pub fn signin_ended(why: &str) -> bool {
+    ["authentication_error", "Failed to authenticate", "Please run /login", "OAuth token has expired", "OAuth token revoked", "Invalid API key", "API Error: 401"]
+        .iter()
+        .any(|w| why.contains(w))
+}
+
+// What Claude Code's sign-in looks like on disk right now: its Keychain entry's details (never the secret itself) and
+// when its credentials file last changed. A new sign-in rewrites one of them, so a change means it has been redone.
+pub fn signin_mark() -> String {
+    let keychain = std::process::Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let file = std::fs::metadata(home().join(".claude/.credentials.json")).and_then(|m| m.modified()).map(|t| format!("{t:?}")).unwrap_or_default();
+    format!("{keychain}|{file}")
+}
+
 #[derive(Debug)]
 pub struct SignedOut(pub String);
 impl std::fmt::Display for SignedOut {
@@ -282,7 +302,7 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: 
             Some("result") => {
                 if v["is_error"].as_bool() == Some(true) {
                     let why = v["result"].as_str().unwrap_or("Claude Code stopped.");
-                    if why.contains("Failed to authenticate") || why.contains("401") {
+                    if signin_ended(why) {
                         bail!(SignedOut(why.to_string()));
                     }
                     bail!("{}", why);
@@ -303,4 +323,17 @@ pub async fn run(path: &str, cwd: &PathBuf, system: &str, prompt: &str, images: 
         bail!("Claude Code stopped: {}", err.lines().last().unwrap_or("no answer"));
     }
     Ok(Run { text, session })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn only_a_real_sign_in_end_counts() {
+        // Graham's Mac Studio, 2 Nov 2026.
+        assert!(signin_ended(r#"Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth access token is invalid."},"request_id":"req_011CgeNB6w9mLyC6vhYoPsPy"}"#));
+        assert!(signin_ended("Invalid API key · Please run /login"));
+        assert!(!signin_ended(r#"API Error: 500 {"type":"error","error":{"type":"api_error","message":"Internal server error"},"request_id":"req_0114012abc"}"#));
+        assert!(!signin_ended("API Error: 529 Overloaded"));
+    }
 }
