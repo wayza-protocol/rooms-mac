@@ -73,6 +73,7 @@ struct App {
     // When each flag above was set, and what that maker's sign-in looked like on disk then (Claude's, then Codex's), so
     // a sign-in redone anywhere (Terminal, a renewal) or a 401 that passes is noticed (build review 2, item 2).
     revoked_at: Mutex<[Option<(std::time::Instant, String)>; 2]>,
+    ran: [std::sync::atomic::AtomicU64; 2], // runs that worked, Claude Code's then Codex's: a turn with nothing to answer proves no sign-in
     live: tokio::sync::Notify,    // wakes the account socket after signing in
     help: Mutex<(String, Option<std::time::Instant>)>, // Rooms help, and when to fetch it again
 }
@@ -538,8 +539,8 @@ fn idle_secs() -> Option<u64> {
 }
 
 // Once a minute, while you're using this computer, wayza.com hears it: your AIs answer from the computer you're on.
-// And a sign-in that ended is looked at again: redone anywhere (its mark on disk changed), or 30 minutes on in case the
-// sign-in never really ended (a 401 that passed), this computer tries again; a real sign-out flags it again at once.
+// And a sign-in that ended is looked at again: redone anywhere (its mark on disk changed, in Terminal or by a renewal),
+// this computer answers again. (30 minutes on, place() lets the next ask try once instead.)
 async fn activity(h: AppHandle, app: Shared) {
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
@@ -547,7 +548,7 @@ async fn activity(h: AppHandle, app: Shared) {
             let flag = if gpt { &app.codex_revoked } else { &app.revoked };
             let at = app.revoked_at.lock().unwrap()[gpt as usize].clone();
             let retry = match (flag.load(std::sync::atomic::Ordering::SeqCst), at) {
-                (true, Some((when, mark))) => when.elapsed() >= Duration::from_secs(30 * 60) || signin_mark(&app, gpt) != mark,
+                (true, Some((_, mark))) => signin_mark(&app, gpt) != mark,
                 _ => false,
             };
             if retry {
@@ -1058,9 +1059,13 @@ async fn on_event(h: &AppHandle, app: &Shared, ev: Value) {
 fn place(app: &Shared, orders: &Value, ai: &str) -> Option<usize> {
     let gpt = app.is_gpt(ai);
     let maker = if gpt { "chatgpt" } else { "claude" };
-    // Its sign-in here has ended: wayza.com hears it from report() and leaves this computer out; until then, don't try.
+    // Its sign-in here has ended: wayza.com hears it from report() and leaves this computer out, so it doesn't try.
+    // 30 minutes on, the next ask is tried here once, after every computer in the order has had its turn, in case the
+    // sign-in never really ended (a 401 that passed); it still shows as signed out until a turn works (build review 3,
+    // item 2). A sign-in redone on disk is noticed sooner (activity()).
     if if gpt { &app.codex_revoked } else { &app.revoked }.load(std::sync::atomic::Ordering::SeqCst) {
-        return None;
+        let due = app.revoked_at.lock().unwrap()[gpt as usize].as_ref().map(|(at, _)| at.elapsed() >= Duration::from_secs(30 * 60)).unwrap_or(true);
+        return due.then(|| orders[maker].as_array().map(|a| a.len()).unwrap_or(0));
     }
     orders[maker].as_array()?.iter().position(|c| c == &json!(app.mac_id()))
 }
@@ -1151,6 +1156,8 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
         }
         b.insert(key.clone(), false);
     }
+    let gpt = app.is_gpt(ai);
+    let ran_before = app.ran[gpt as usize].load(std::sync::atomic::Ordering::SeqCst);
     let mut r = turn(app, room, side, ai).await;
     loop {
         let again = {
@@ -1169,20 +1176,24 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
         r = turn(app, room, side, ai).await;
     }
     // Each maker's sign-in on its own: Claude Code's for Claudes, the rooms' Codex sign-in for ChatGPTs.
-    let gpt = app.is_gpt(ai);
     let flag = if gpt { &app.codex_revoked } else { &app.revoked };
     // It answered, so its sign-in works: a "signed out" this Mac told wayza.com before is taken back, so the strip, the
     // footer and the waiting cards go (Graham, 2 Nov 2026: they stayed after Claude answered again).
     // wayza.com is asked too, not only this app's own flag: Sign in clears the flag at once, and a restart forgets it, while
     // wayza.com still says signed out (fresh review 1).
     // (This computer tells wayza.com its sign-ins each time its socket opens, so a restart can't leave one stale.)
-    if r.is_ok() && flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+    // Only a turn that really ran proves it: one that found nothing to answer, or another computer answering, doesn't.
+    let ran = app.ran[gpt as usize].load(std::sync::atomic::Ordering::SeqCst) != ran_before;
+    if r.is_ok() && ran && flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        app.revoked_at.lock().unwrap()[gpt as usize] = None;
         signed_in_again(h, app).await;
     }
     if let Err(e) = r {
         // A sign-in that has ended shows as signed out (MacSignedOut1, MacSignedOutCodex1), even when the program's own
         // files still look signed in.
-        if e.downcast_ref::<claude::SignedOut>().is_some() && !flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        // (A try 30 minutes on that fails again waits another 30 minutes.)
+        if e.downcast_ref::<claude::SignedOut>().is_some() {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
             app.revoked_at.lock().unwrap()[gpt as usize] = Some((std::time::Instant::now(), signin_mark(app, gpt)));
         }
         let out = app.signed_out_makers();
@@ -1639,12 +1650,16 @@ fn failed_words(gpt: bool, why: &str) -> String {
 // bubble, a named gap), Claude Code for every other AI.
 #[allow(clippy::too_many_arguments)]
 async fn ai_run(app: &Shared, gpt: bool, cwd: &PathBuf, system: &str, prompt: &str, images: &[claude::Image], tools: claude::Tools, room_cfg: Option<&PathBuf>, room_pass: Option<&str>, resume: Option<&str>, on_text: impl FnMut(&str)) -> Result<claude::Run> {
-    if gpt {
+    let r = if gpt {
         let room = room_pass.map(|p| codex::Room { url: format!("{}/wayza/mcp", app.api.base.trim_end_matches('/')), pass: p });
         codex::run(&app.path, &app.codex_home(), cwd, system, prompt, images, tools, room, resume).await
     } else {
         claude::run(&app.path, cwd, system, prompt, images, tools, room_cfg, resume, on_text).await
+    };
+    if r.is_ok() {
+        app.ran[gpt as usize].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
+    r
 }
 
 // The turn is over: the pass stops working on wayza.com, and its file goes.
@@ -1680,6 +1695,7 @@ fn main() {
                 revoked: std::sync::atomic::AtomicBool::new(false),
                 codex_revoked: std::sync::atomic::AtomicBool::new(false),
                 revoked_at: Mutex::new([None, None]),
+                ran: [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)],
                 live: tokio::sync::Notify::new(),
                 help: Mutex::new((String::new(), None)),
             });
