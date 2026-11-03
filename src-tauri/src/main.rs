@@ -1086,7 +1086,7 @@ async fn this_mac_runs_ai(app: &Shared) -> bool {
     app.api.get("/me/active-mac", &session).await.map(|v| v["mac"] == json!(app.mac_id())).unwrap_or(false)
 }
 
-// A banner only when someone wants you: a mention, or everything if the room's bell says so (Notify4, MacNotify1).
+// A banner only when someone wants you: a mention or a reply to you, or everything if the room's bell says so (Notify4, MacNotify1).
 async fn notify_message(h: &AppHandle, app: &Shared, room: &str, m: &Value, me: &str) {
     let Some(session) = app.session() else { return };
     let Ok(r) = app.api.get(&format!("/rooms/{}", enc(room)), &session).await else { return };
@@ -1112,7 +1112,10 @@ async fn notify_message(h: &AppHandle, app: &Shared, room: &str, m: &Value, me: 
         }
         return;
     }
-    let mentioned = m["mentions"].as_array().map(|a| a.iter().any(|x| x == &json!(me))).unwrap_or(false);
+    // Named, or a reply to something you wrote (ReplyFlow5: the bell's "Mentions, replies and asks"). The server leaves
+    // reply_to_from out when you blocked the writer or replied to yourself.
+    let mentioned = m["mentions"].as_array().map(|a| a.iter().any(|x| x == &json!(me))).unwrap_or(false)
+        || m["reply_to_from"] == json!(me);
     // AIs talking to each other never notify you, whatever the bell is set to (the bell's own note says so). An ask is
     // handled above, so "Claude asks you" still makes a banner.
     if m["from"]["kind"] == json!("ai") && !mentioned {
