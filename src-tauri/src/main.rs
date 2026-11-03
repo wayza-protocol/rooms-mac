@@ -140,6 +140,18 @@ impl App {
         }
         v
     }
+    // The makers this computer can't run at all (Claude Code or Codex not installed), so Your computers doesn't count it
+    // as answering for them (build review 1, item 8).
+    fn missing_makers(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if claude::state(&self.path) == claude::State::Missing {
+            v.push("claude");
+        }
+        if codex::state(&self.path, &self.codex_home()) == claude::State::Missing {
+            v.push("chatgpt");
+        }
+        v
+    }
     // Every Claude this app runs: the first one, then the others.
     fn held(&self) -> Vec<String> {
         let s = self.saved.lock().unwrap();
@@ -485,7 +497,7 @@ async fn sync_ais(app: &Shared) {
 // app's own sign-in in place of its old one the first time; one that can't must sign in again on this computer.
 async fn report(app: &Shared, used: bool) -> Result<()> {
     let Some(session) = app.session() else { return Ok(()) };
-    let mut b = json!({ "v": 2, "computer": app.mac_id(), "name": app.mac_name, "os": OS, "state": "on", "signed_out": app.signed_out_makers() });
+    let mut b = json!({ "v": 2, "computer": app.mac_id(), "name": app.mac_name, "os": OS, "state": "on", "signed_out": app.signed_out_makers(), "missing": app.missing_makers() });
     if used {
         b["used"] = json!(true);
     }
@@ -1015,7 +1027,12 @@ async fn on_event(h: &AppHandle, app: &Shared, ev: Value) {
 // This computer's place in the order wayza.com sent for the AI's maker (computers.js): 0 tries at once, 1 after 20
 // seconds, 2 after 40. None: another computer of yours answers (this one said no, or its sign-in for that maker ended).
 fn place(app: &Shared, orders: &Value, ai: &str) -> Option<usize> {
-    let maker = if app.is_gpt(ai) { "chatgpt" } else { "claude" };
+    let gpt = app.is_gpt(ai);
+    let maker = if gpt { "chatgpt" } else { "claude" };
+    // Its sign-in here has ended: wayza.com hears it from report() and leaves this computer out; until then, don't try.
+    if if gpt { &app.codex_revoked } else { &app.revoked }.load(std::sync::atomic::Ordering::SeqCst) {
+        return None;
+    }
     orders[maker].as_array()?.iter().position(|c| c == &json!(app.mac_id()))
 }
 async fn in_place(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str, n: usize) {
@@ -1134,11 +1151,6 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
         signed_in_again(h, app).await;
     }
     if let Err(e) = r {
-        // A turn that ended without answering lets go of it, so another computer of yours can (computers.js). Only the
-        // computer holding the turn can; for any other this does nothing.
-        if let Some(key) = app.key_for(ai) {
-            let _ = app.api.delete(&format!("/rooms/{}/{}", enc(room), if side { "side" } else { "turn" }), &key).await;
-        }
         // A sign-in that has ended shows as signed out (MacSignedOut1, MacSignedOutCodex1), even when the program's own
         // files still look signed in.
         if e.downcast_ref::<claude::SignedOut>().is_some() {
@@ -1146,11 +1158,17 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
         }
         let out = app.signed_out_makers();
         if out.contains(&if gpt { "chatgpt" } else { "claude" }) {
-            // wayza.com hears it, and sends the ask to your next computer that can answer.
+            // wayza.com hears it first: it lets go of this computer's turn and sends the ask to your next computer at
+            // once, with this one left out of the order (build review 1, item 3).
             if let Err(e) = report(app, false).await {
                 log(&format!("this computer not reported: {e}"));
             }
             push_state(h);
+        }
+        // A turn that ended without answering lets go of it, so another computer of yours can (computers.js). Only the
+        // computer holding the turn can; for any other (and after the report above, which already let go) it does nothing.
+        if let Some(key) = app.key_for(ai) {
+            let _ = app.api.delete(&format!("/rooms/{}/{}", enc(room), if side { "side" } else { "turn" }), &key).await;
         }
         log(&format!("{} couldn't answer in {room}: {e}", if gpt { "ChatGPT" } else { "Claude" }));
     }
