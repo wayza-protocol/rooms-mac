@@ -1,4 +1,6 @@
-// wayza.com's REST API (/wayza/v0), as the person (their wzs_ session) or as their AI (its key).
+// wayza.com's REST API (/wayza/v0), as the person (their wzs_ session) or as one of their AIs the app runs. Acting as an
+// AI, the app sends its own sign-in and names the AI with Wayza-As (design "Your Claude on all your computers", 3 Nov
+// 2026): no computer keeps an AI's key. Code that acts as an AI passes "as:<its address>" where a key used to go.
 
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
@@ -18,7 +20,7 @@ impl Api {
     pub async fn call(&self, method: reqwest::Method, path: &str, bearer: Option<&str>, body: Option<Value>) -> Result<Value> {
         let mut req = self.http.request(method, format!("{}/wayza/v0{}", self.base, path));
         if let Some(b) = bearer {
-            req = req.bearer_auth(b);
+            req = signed(req, b)?;
         }
         if let Some(b) = body {
             req = req.json(&b);
@@ -63,7 +65,7 @@ impl Api {
 
     // A photo or file's bytes (rooms/{id}/files/{file}), as the AI.
     pub async fn bytes(&self, path: &str, bearer: &str) -> Result<Vec<u8>> {
-        let res = self.http.get(format!("{}/wayza/v0{}", self.base, path)).bearer_auth(bearer).send().await?;
+        let res = signed(self.http.get(format!("{}/wayza/v0{}", self.base, path)), bearer)?.send().await?;
         if !res.status().is_success() {
             bail!("wayza.com said no ({})", res.status().as_u16());
         }
@@ -74,8 +76,20 @@ impl Api {
         self.post("/mac/token", None, json!({ "code": code, "code_verifier": verifier })).await
     }
     // The AI the person said yes to: its address and a new key.
+    // v: 2, so wayza.com hands this app no key: it acts as the AI with its own sign-in.
     pub async fn ai_token(&self, code: &str, verifier: &str) -> Result<Value> {
-        self.post("/mac/ai-token", None, json!({ "code": code, "code_verifier": verifier })).await
+        self.post("/mac/ai-token", None, json!({ "code": code, "code_verifier": verifier, "v": 2 })).await
+    }
+}
+
+// The person's session, or for "as:<address>" the person's session plus Wayza-As naming that AI.
+fn signed(req: reqwest::RequestBuilder, bearer: &str) -> Result<reqwest::RequestBuilder> {
+    match bearer.strip_prefix("as:") {
+        Some(ai) => {
+            let Some(session) = crate::auth::kept("session") else { bail!(Unauthorized("Sign in again.".into())) };
+            Ok(req.bearer_auth(session).header("Wayza-As", ai))
+        }
+        None => Ok(req.bearer_auth(bearer)),
     }
 }
 
