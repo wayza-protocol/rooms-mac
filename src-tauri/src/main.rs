@@ -70,6 +70,9 @@ struct App {
     signing_in: std::sync::atomic::AtomicBool,
     revoked: std::sync::atomic::AtomicBool, // Claude Code said its sign-in ended, until it answers again
     codex_revoked: std::sync::atomic::AtomicBool, // the same for Codex's rooms sign-in
+    // When each flag above was set, and what that maker's sign-in looked like on disk then (Claude's, then Codex's), so
+    // a sign-in redone anywhere (Terminal, a renewal) or a 401 that passes is noticed (build review 2, item 2).
+    revoked_at: Mutex<[Option<(std::time::Instant, String)>; 2]>,
     live: tokio::sync::Notify,    // wakes the account socket after signing in
     help: Mutex<(String, Option<std::time::Instant>)>, // Rooms help, and when to fetch it again
 }
@@ -501,6 +504,11 @@ async fn report(app: &Shared, used: bool) -> Result<()> {
     if used {
         b["used"] = json!(true);
     }
+    // An older app's sign-in proves it is that app with the AI key it kept in the Keychain, once (wayza.com,
+    // computers.js): then it becomes the app's own, with no new sign-in.
+    if let Some(k) = auth::kept("ai:claude").or_else(|| auth::kept("ai:chatgpt")) {
+        b["key"] = json!(k);
+    }
     let v = app.api.put("/me/active-mac", &session, b).await?;
     if let Some(s) = v["session"].as_str() {
         auth::keep("session", s)?;
@@ -530,9 +538,26 @@ fn idle_secs() -> Option<u64> {
 }
 
 // Once a minute, while you're using this computer, wayza.com hears it: your AIs answer from the computer you're on.
-async fn activity(app: Shared) {
+// And a sign-in that ended is looked at again: redone anywhere (its mark on disk changed), or 30 minutes on in case the
+// sign-in never really ended (a 401 that passed), this computer tries again; a real sign-out flags it again at once.
+async fn activity(h: AppHandle, app: Shared) {
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
+        for gpt in [false, true] {
+            let flag = if gpt { &app.codex_revoked } else { &app.revoked };
+            let at = app.revoked_at.lock().unwrap()[gpt as usize].clone();
+            let retry = match (flag.load(std::sync::atomic::Ordering::SeqCst), at) {
+                (true, Some((when, mark))) => when.elapsed() >= Duration::from_secs(30 * 60) || signin_mark(&app, gpt) != mark,
+                _ => false,
+            };
+            if retry {
+                log(&format!("{} sign-in may work again: trying", if gpt { "Codex" } else { "Claude Code" }));
+                app.revoked_at.lock().unwrap()[gpt as usize] = None;
+                flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                signed_in_again(&h, &app).await;
+                catch_up(&h, &app).await;
+            }
+        }
         if app.session().is_some() && idle_secs().map(|s| s < 120).unwrap_or(false) {
             if let Err(e) = report(&app, true).await {
                 log(&format!("this computer's use not reported: {e}"));
@@ -597,8 +622,12 @@ fn codex_sign_in(h: AppHandle) {
 // After Sign in: once the new sign-in is on this Mac (Claude Code's Keychain entry or credentials file rewritten, the
 // rooms' Codex sign-in file rewritten), wayza.com is told, so the strip and the waiting cards go, and every ask that
 // waited is answered now, as the waiting card says. Watched for 15 minutes; after that the next ask finds out.
+// What a maker's sign-in looks like on disk now (never the secret): a new sign-in or a renewal changes it.
+fn signin_mark(app: &Shared, gpt: bool) -> String {
+    if gpt { std::fs::metadata(app.codex_home().join("auth.json")).and_then(|m| m.modified()).map(|t| format!("{t:?}")).unwrap_or_default() } else { claude::signin_mark() }
+}
 async fn after_sign_in(h: &AppHandle, app: &Shared, gpt: bool) {
-    let mark = |app: &Shared| if gpt { std::fs::metadata(app.codex_home().join("auth.json")).and_then(|m| m.modified()).map(|t| format!("{t:?}")).unwrap_or_default() } else { claude::signin_mark() };
+    let mark = |app: &Shared| signin_mark(app, gpt);
     // Every change counts, for the whole 15 minutes: a change can come before the sign-in has finished (or from another
     // Claude Code renewing it), and the asks it tries then fail again, so the next change tries again (fresh review 2).
     let mut before = mark(app);
@@ -1153,8 +1182,8 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
     if let Err(e) = r {
         // A sign-in that has ended shows as signed out (MacSignedOut1, MacSignedOutCodex1), even when the program's own
         // files still look signed in.
-        if e.downcast_ref::<claude::SignedOut>().is_some() {
-            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        if e.downcast_ref::<claude::SignedOut>().is_some() && !flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            app.revoked_at.lock().unwrap()[gpt as usize] = Some((std::time::Instant::now(), signin_mark(app, gpt)));
         }
         let out = app.signed_out_makers();
         if out.contains(&if gpt { "chatgpt" } else { "claude" }) {
@@ -1650,6 +1679,7 @@ fn main() {
                 signing_in: std::sync::atomic::AtomicBool::new(false),
                 revoked: std::sync::atomic::AtomicBool::new(false),
                 codex_revoked: std::sync::atomic::AtomicBool::new(false),
+                revoked_at: Mutex::new([None, None]),
                 live: tokio::sync::Notify::new(),
                 help: Mutex::new((String::new(), None)),
             });
@@ -1695,7 +1725,7 @@ fn main() {
             });
             a.manage(app);
             tauri::async_runtime::spawn(live(a.handle().clone()));
-            tauri::async_runtime::spawn(activity(a.state::<Shared>().inner().clone()));
+            tauri::async_runtime::spawn(activity(a.handle().clone(), a.state::<Shared>().inner().clone()));
             Ok(())
         })
         .run(tauri::generate_context!())
