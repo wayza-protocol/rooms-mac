@@ -566,7 +566,7 @@ async fn activity(h: AppHandle, app: Shared) {
                 app.revoked_at.lock().unwrap()[gpt as usize] = None;
                 flag.store(false, std::sync::atomic::Ordering::SeqCst);
                 signed_in_again(&h, &app).await;
-                catch_up(&h, &app).await;
+                try_waiting = true; // one catch_up for this tick, whatever asked for it
             }
         }
         if try_waiting {
@@ -955,8 +955,22 @@ fn route(u: &url::Url) -> Route {
 
 // The wayza.com pages the app window shows: Rooms (and the invite links into them), records, and your account.
 fn in_window(path: &str) -> bool {
-    path == "/account" || ["/account/", "/rooms/", "/records/"].iter().any(|p| path.starts_with(p))
+    // Pages wayza.com keeps from the app's own window (window-sessions.js there) open in your web browser instead:
+    // deleting the account, claiming an AI, and anything under /account the window doesn't use (build review 6).
+    let p = path.trim_end_matches('/');
+    let window_account = p == "/account"
+        || p == "/account/rooms" || p.starts_with("/account/rooms/")
+        || p.starts_with("/account/notify")
+        || p.starts_with("/account/sign")
+        || ["/account/photo", "/account/turned-away", "/account/me.json"].contains(&p)
+        || (p.starts_with("/account/") && !p[9..].contains('/') && ACCOUNT_TABS.contains(&&p[9..]));
+    if p == "/account/rooms/mac/signin" || p == "/account/rooms/mac/bring" {
+        return false;
+    }
+    window_account || ["/rooms/", "/records/"].iter().any(|x| path.starts_with(x))
 }
+// The account page's sections (dashboard.js TABS on wayza.com).
+const ACCOUNT_TABS: &[&str] = &["front-door", "messages", "requests", "reach", "picture", "ais", "apps", "computers", "meet", "activity", "feedback", "security"];
 
 fn passport_url(address: &str) -> Option<String> {
     let a = address.trim();
@@ -1767,10 +1781,11 @@ mod tests {
 
     #[test]
     fn only_rooms_and_account_stay_in_the_window() {
-        for p in ["/account", "/account/reach", "/account/rooms/room_1", "/rooms/join/abc", "/records/x"] {
+        for p in ["/account", "/account/reach", "/account/security", "/account/photo", "/account/notify", "/account/rooms/room_1", "/rooms/join/abc", "/records/x"] {
             assert!(in_window(p), "{p}");
         }
-        for p in ["/", "/docs/", "/developers/", "/live", "/help/", "/passport/maya", "/accounts", "/roomsx"] {
+        for p in ["/", "/docs/", "/developers/", "/live", "/help/", "/passport/maya", "/accounts", "/roomsx", "/account/delete", "/account/agent-claim",
+            "/account/claim/abc", "/account/stats", "/account/rooms/mac/signin", "/account/rooms/mac/bring", "/account/somewhere-new"] {
             assert!(!in_window(p), "{p}");
         }
     }
