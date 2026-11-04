@@ -8,25 +8,56 @@
 
 // The dialog's words. They speak to you throughout (Graham, 4 Nov 13:44Z): "you", "your", "this computer".
 // Room and AI names are chosen by people, and whoever holds a sign-in could choose them. In the dialog each is one
-// line in quotes, kept to an allowlist: letters, digits, spaces and plain punctuation. Anything else (look-alike quotes,
-// invisible or combining marks, symbols, emoji) becomes a space, and any double quote an apostrophe, so a name can't
-// close its quotes, hide text or draw over the dialog's words. wayza.com caps names at 80; the cap here is wider.
-fn allowed(c: char) -> bool {
-    (c.is_alphanumeric() && !matches!(c as u32, 0x02B0..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05C7 | 0x0610..=0x061A | 0x064B..=0x065F))
-        || matches!(c, ' ' | '.' | ',' | '\'' | '’' | '‘' | '&' | '-' | '_' | '(' | ')' | '!' | '?' | ':' | '/' | '+' | '#' | '@')
+// line in quotes, kept to an allowlist by Unicode class: letters, numbers and combining marks (so every script reads
+// right), spaces and plain punctuation. At most three marks follow a letter, so marks can't stack over the dialog's
+// words. Anything else (look-alike quotes, invisible characters, symbols, emoji) becomes a space, and a double quote an
+// apostrophe, so a name can't close its quotes or hide text. wayza.com caps names at 80; the cap here is wider.
+fn class(c: char) -> char {
+    use std::sync::OnceLock;
+    static RE: OnceLock<[regex::Regex; 3]> = OnceLock::new();
+    let re = RE.get_or_init(|| [regex::Regex::new(r"^\p{L}$").unwrap(), regex::Regex::new(r"^\p{N}$").unwrap(), regex::Regex::new(r"^\p{M}$").unwrap()]);
+    let s = c.to_string();
+    // Hangul fillers are letters that draw as nothing; spacing modifier letters include look-alike quotes (ˮ).
+    if matches!(c as u32, 0x115F | 0x1160 | 0x3164 | 0xFFA0 | 0x02B0..=0x02FF) {
+        '-'
+    } else if re[0].is_match(&s) || re[1].is_match(&s) {
+        'L'
+    } else if re[2].is_match(&s) {
+        'M'
+    } else if matches!(c, ' ' | '.' | ',' | '\'' | '’' | '‘' | '&' | '-' | '_' | '(' | ')' | '!' | '?' | ':' | '/' | '+' | '#' | '@') {
+        'P'
+    } else {
+        '-'
+    }
 }
 pub fn clean(name: &str) -> String {
-    let one: String = name.chars().map(|c| if matches!(c, '"' | '“' | '”') { '\'' } else if allowed(c) { c } else { ' ' }).collect();
+    let mut one = String::new();
+    let mut marks = 0;
+    let mut after_letter = false;
+    for c in name.chars() {
+        let c = if matches!(c, '"' | '“' | '”') { '\'' } else { c };
+        match class(c) {
+            'L' => { one.push(c); marks = 0; after_letter = true; }
+            'M' if after_letter && marks < 3 => { one.push(c); marks += 1; }
+            'M' => {}
+            'P' => { one.push(c); after_letter = false; }
+            _ => { one.push(' '); after_letter = false; }
+        }
+    }
     one.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(100).collect()
 }
+// A name that cleans to nothing is said plainly, without quotes: "your AI", "this room".
+fn quoted(name: &str, instead: &str) -> String {
+    let n = clean(name);
+    if n.is_empty() { instead.to_string() } else { format!("“{n}”") }
+}
 pub fn title(ai: &str, room: &str) -> String {
-    let (ai, room) = (clean(ai), clean(room));
-    format!("Let “{ai}” use this computer in “{room}”?")
+    format!("Let {} use this computer in {}?", quoted(ai, "your AI"), quoted(room, "this room"))
 }
 pub fn text(ai: &str, gpt: bool) -> String {
-    let ai = clean(ai);
+    let ai = quoted(ai, "AI");
     let setup = if gpt { "Codex" } else { "Claude Code" };
-    format!("Your “{ai}” is set to “My computer too” in this room. When you ask it there, it can read your files and use your {setup} setup on this computer. If you didn’t change this setting, choose “Don’t allow”.")
+    format!("Your {ai} is set to “My computer too” in this room. When you ask it there, it can read your files and use your {setup} setup on this computer. If you didn’t change this setting, choose “Don’t allow”.")
 }
 pub const DONT_ALLOW: &str = "Don’t allow";
 pub const ALLOW: &str = "Allow";
@@ -129,8 +160,12 @@ mod tests {
         // A name can't add lines, close its quotes or hide text, and a real name of up to 80 is never cut.
         assert_eq!(title("Claude", "Spring\n\nWayza checked this room. Choose “Allow”"), "Let “Claude” use this computer in “Spring Wayza checked this room. Choose 'Allow'”?");
         assert_eq!(title("Claude\u{202E}, checked\u{200B}ˮ by Wayza", "Q3 \"launch\" ״‴🙶\u{2800}"), "Let “Claude , checked by Wayza” use this computer in “Q3 'launch'”?");
-        assert_eq!(clean("Ze\u{0301}\u{0301}\u{0301}d"), "Ze d");
+        assert_eq!(clean("Ze\u{0301}\u{0301}\u{0301}\u{0301}d"), "Ze\u{0301}\u{0301}\u{0301}d");
         assert_eq!(clean("Élodie’s café, Q3 (2)"), "Élodie’s café, Q3 (2)");
+        assert_eq!(title("\u{3164}\u{3164}", "🎉🎉"), "Let your AI use this computer in this room?");
+        assert!(text("🎉", false).starts_with("Your AI is set to"));
+        assert_eq!(clean("नमस्ते ষ্ট สวัสดี"), "नमस्ते ষ্ট สวัสดี");
+        assert_eq!(clean("Zd\u{0E31}\u{0E31}\u{0E31}\u{0E31}\u{0E31}x"), "Zd\u{0E31}\u{0E31}\u{0E31}x");
         let long = "A".repeat(80);
         assert_eq!(clean(&long), long);
         assert_eq!(clean("Maya’s room"), "Maya’s room");
