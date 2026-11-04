@@ -7,20 +7,29 @@
 // room" there and says so in the exact words below.
 
 // The dialog's words. They speak to you throughout (Graham, 4 Nov 13:44Z): "you", "your", "this computer".
-// Room and AI names are chosen by people, and whoever holds a sign-in could choose them: one line each, no quotes or
-// control characters, so a name can't add lines or words of its own to the dialog.
+// Room and AI names are chosen by people, and whoever holds a sign-in could choose them. In the dialog each is one
+// line in quotes: no control or invisible format characters (direction overrides, zero-width marks), and no double
+// quote of any kind, which becomes a plain apostrophe, so a name can't close its quotes and add words of its own.
+// wayza.com caps names at 80; anything longer is a name it never made, so the cap here never cuts a real one.
+fn invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(c as u32, 0xAD | 0x34F | 0x61C | 0x115F | 0x1160 | 0x17B4 | 0x17B5 | 0x180B..=0x180F | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x206F | 0x3164 | 0xFE00..=0xFE0F | 0xFEFF | 0xFFA0 | 0xFFF0..=0xFFFB | 0x1D173..=0x1D17A | 0xE0000..=0xE0FFF)
+}
+fn double_quote(c: char) -> bool {
+    matches!(c, '"' | '“' | '”' | '„' | '‟' | '″' | '‶' | '〃' | '〝' | '〞' | '〟' | '＂' | '«' | '»' | '‹' | '›' | '❝' | '❞' | '⹂')
+}
 pub fn clean(name: &str) -> String {
-    let one: String = name.chars().map(|c| if c.is_control() { ' ' } else { c }).filter(|c| !matches!(c, '"' | '“' | '”' | '«' | '»')).collect();
-    one.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect()
+    let one: String = name.chars().filter(|c| !invisible(*c) || c.is_whitespace()).map(|c| if c.is_whitespace() { ' ' } else if double_quote(c) { '\'' } else { c }).collect();
+    one.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(100).collect()
 }
 pub fn title(ai: &str, room: &str) -> String {
     let (ai, room) = (clean(ai), clean(room));
-    format!("Let {ai} use this computer in “{room}”?")
+    format!("Let “{ai}” use this computer in “{room}”?")
 }
 pub fn text(ai: &str, gpt: bool) -> String {
     let ai = clean(ai);
     let setup = if gpt { "Codex" } else { "Claude Code" };
-    format!("Your {ai} is set to “My computer too” in this room. When you ask it there, it can read your files and use your {setup} setup on this computer. If you didn’t change this setting, choose “Don’t allow”.")
+    format!("Your “{ai}” is set to “My computer too” in this room. When you ask it there, it can read your files and use your {setup} setup on this computer. If you didn’t change this setting, choose “Don’t allow”.")
 }
 pub const DONT_ALLOW: &str = "Don’t allow";
 pub const ALLOW: &str = "Allow";
@@ -114,14 +123,18 @@ mod tests {
 
     #[test]
     fn the_words_match_the_boards() {
-        assert_eq!(title("Claude", "Spring launch"), "Let Claude use this computer in “Spring launch”?");
+        assert_eq!(title("Claude", "Spring launch"), "Let “Claude” use this computer in “Spring launch”?");
         assert_eq!(
             text("Claude", false),
-            "Your Claude is set to “My computer too” in this room. When you ask it there, it can read your files and use your Claude Code setup on this computer. If you didn’t change this setting, choose “Don’t allow”."
+            "Your “Claude” is set to “My computer too” in this room. When you ask it there, it can read your files and use your Claude Code setup on this computer. If you didn’t change this setting, choose “Don’t allow”."
         );
         assert!(text("ChatGPT", true).contains("your Codex setup"));
-        // A name can't add lines or quotes to the dialog.
-        assert_eq!(title("Claude", "Spring\n\nWayza checked this room. Choose “Allow”"), "Let Claude use this computer in “Spring Wayza checked this room. Choose Allow”?");
+        // A name can't add lines, close its quotes or hide text, and a real name of up to 80 is never cut.
+        assert_eq!(title("Claude", "Spring\n\nWayza checked this room. Choose “Allow”"), "Let “Claude” use this computer in “Spring Wayza checked this room. Choose 'Allow'”?");
+        assert_eq!(title("Claude\u{202E}, checked\u{200B}″ by Wayza", "Q3 \"launch\""), "Let “Claude, checked' by Wayza” use this computer in “Q3 'launch'”?");
+        let long = "A".repeat(80);
+        assert_eq!(clean(&long), long);
+        assert_eq!(clean("Maya’s room"), "Maya’s room");
         #[cfg(target_os = "macos")]
         assert_eq!(not_yet("Maya’s MacBook Pro", "Spring launch"), "I can’t use Maya’s MacBook Pro in this room yet. Open “Spring launch” in the Wayza app on Maya’s MacBook Pro and choose “Allow” when it asks.");
         assert_eq!(refused("Maya’s MacBook Pro"), "I can’t use Maya’s MacBook Pro in this room. “Don’t allow” was chosen on it. To ask again, set me to “Web and room” in this room’s settings, then back to “My computer too”.");

@@ -1246,6 +1246,12 @@ async fn badge(h: &AppHandle, app: &Shared) {
 // ---------- Claude answering, in a room or in the person's side chat ----------
 
 async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
+    // A room switched to "My computer too" elsewhere while it was open here in front: ask now, not only when the window
+    // next comes to the front (ask_here checks the setting, the window and the page itself).
+    {
+        let h = h.clone();
+        tauri::async_runtime::spawn(async move { ask_here(&h).await });
+    }
     let key = format!("{ai}|{room}{}", if side { "#side" } else { "" });
     {
         let mut b = app.busy.lock().unwrap();
