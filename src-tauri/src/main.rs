@@ -1,6 +1,7 @@
 // The Wayza app for Mac. The window shows the rooms live from wayza.com, the same pages as the browser; the app adds
 // only what a web page can't do: run the person's own Claude Code here, keep the sign-in in the Keychain, banners and
-// the Dock badge, and "Use this Mac" (plan agreed 31 Oct 2026; boards MacFirst1 to MacSignin1).
+// the Dock badge, and answering from whichever of your computers you use (plan agreed 31 Oct 2026; boards MacFirst1 to
+// MacSignin1; "Your Claude on all your computers", agreed 3 Nov 2026).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -28,18 +29,21 @@ const BASE: &str = match option_env!("WAYZA_URL") {
     None => "https://wayza.com",
 };
 
+// Which kind of computer this is, for Your computers and the room page ("this computer" either way).
+const OS: &str = if cfg!(windows) { "windows" } else { "mac" };
+
 // What the app remembers between launches. Secrets (the session, the AI's key) live in the Keychain, not here.
 #[derive(Serialize, Deserialize, Default, Clone)]
 struct Saved {
     mac: String,                      // this Mac's id, made once
     me: Option<String>,               // the person's address
     ai: Option<String>,               // their Claude's address
-    // Their other Claudes this app runs too (MultiClaude1, Graham 1 Nov 2026), each with its key in the Keychain as
-    // "ai:<address>". One Claude Code sign-in answers for all of them.
+    // Their other Claudes this app runs too (MultiClaude1, Graham 1 Nov 2026). One Claude Code sign-in answers for all
+    // of them. No AI's key is kept: the app acts as each with its own sign-in (api.rs).
     #[serde(default)]
     more: Vec<String>,
-    // Their first ChatGPT, run by the Codex on this computer (Bring Codex into rooms, 2 Nov 2026), its key in the
-    // Keychain as "ai:chatgpt"; their other ChatGPTs are in `more`, and `makers` says which of those are ChatGPTs.
+    // Their first ChatGPT, run by the Codex on this computer (Bring Codex into rooms, 2 Nov 2026); their other ChatGPTs
+    // are in `more`, and `makers` says which of those are ChatGPTs.
     #[serde(default)]
     gpt: Option<String>,
     #[serde(default)]
@@ -66,6 +70,10 @@ struct App {
     signing_in: std::sync::atomic::AtomicBool,
     revoked: std::sync::atomic::AtomicBool, // Claude Code said its sign-in ended, until it answers again
     codex_revoked: std::sync::atomic::AtomicBool, // the same for Codex's rooms sign-in
+    // When each flag above was set, and what that maker's sign-in looked like on disk then (Claude's, then Codex's), so
+    // a sign-in redone anywhere (Terminal, a renewal) or a 401 that passes is noticed (build review 2, item 2).
+    revoked_at: Mutex<[Option<(std::time::Instant, String)>; 2]>,
+    ran: [std::sync::atomic::AtomicU64; 2], // runs that worked, Claude Code's then Codex's: a turn with nothing to answer proves no sign-in
     live: tokio::sync::Notify,    // wakes the account socket after signing in
     help: Mutex<(String, Option<std::time::Instant>)>, // Rooms help, and when to fetch it again
 }
@@ -101,25 +109,10 @@ impl App {
     fn session(&self) -> Option<String> {
         auth::kept("session")
     }
-    fn ai_key(&self) -> Option<String> {
-        auth::kept("ai:claude")
-    }
-    // The key of one of your Claudes this app runs: the first one's, or another's.
+    // How the app acts as one of your AIs it runs: its own sign-in plus Wayza-As (api.rs), never the AI's key. No
+    // computer keeps an AI key since 3 Nov 2026 ("Your Claude on all your computers").
     fn key_for(&self, ai: &str) -> Option<String> {
-        let s = self.saved.lock().unwrap();
-        if s.ai.as_deref() == Some(ai) {
-            drop(s);
-            return self.ai_key();
-        }
-        if s.gpt.as_deref() == Some(ai) {
-            drop(s);
-            return auth::kept("ai:chatgpt");
-        }
-        if s.more.iter().any(|a| a == ai) {
-            drop(s);
-            return auth::kept(&format!("ai:{ai}"));
-        }
-        None
+        if self.held().iter().any(|a| a == ai) { Some(format!("as:{ai}")) } else { None }
     }
     // Which maker's program answers as this AI: Codex for a ChatGPT, Claude Code for the rest.
     fn is_gpt(&self, ai: &str) -> bool {
@@ -138,7 +131,7 @@ impl App {
     }
     // What the page reads as window.wayzaMac: this Mac, Claude Code's and Codex's state, and the first Claude.
     fn page_state(&self) -> Value {
-        json!({ "mac": self.mac_id(), "claude": self.claude_state().as_str(), "codex": self.codex_state().as_str(), "ai": self.saved.lock().unwrap().ai.clone(), "takes": true })
+        json!({ "mac": self.mac_id(), "os": OS, "claude": self.claude_state().as_str(), "codex": self.codex_state().as_str(), "ai": self.saved.lock().unwrap().ai.clone() })
     }
     // The makers whose sign-in has ended on this Mac, for wayza.com (NoticeB3).
     fn signed_out_makers(&self) -> Vec<&'static str> {
@@ -147,6 +140,18 @@ impl App {
             v.push("claude");
         }
         if self.saved.lock().unwrap().gpt.is_some() && self.codex_state() == claude::State::SignedOut {
+            v.push("chatgpt");
+        }
+        v
+    }
+    // The makers this computer can't run at all (Claude Code or Codex not installed), so Your computers doesn't count it
+    // as answering for them (build review 1, item 8).
+    fn missing_makers(&self) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        if claude::state(&self.path) == claude::State::Missing {
+            v.push("claude");
+        }
+        if codex::state(&self.path, &self.codex_home()) == claude::State::Missing {
             v.push("chatgpt");
         }
         v
@@ -212,7 +217,7 @@ fn init_script(app: &App) -> String {
   document.addEventListener('wayza-get-claude-code', function () {{ inv('get_claude_code'); }});
   document.addEventListener('wayza-get-codex', function () {{ inv('get_codex'); }});
   document.addEventListener('wayza-signin', function (e) {{ inv((e.detail || {{}}).maker === 'chatgpt' ? 'codex_sign_in' : 'claude_sign_in'); }});
-  document.addEventListener('wayza-use-this-mac', function (e) {{ var d = e.detail || {{}}; inv('use_this_mac', {{ ai: d.ai || null, ais: Array.isArray(d.ais) ? d.ais : null }}); }});
+  document.addEventListener('wayza-computer-answer', function (e) {{ inv('computer_answer', {{ saidYes: !!(e.detail || {{}}).said_yes }}); }});
   document.addEventListener('wayza-help', function () {{ inv('open_help'); }});
   // Save in the room's photo viewer (PhotoView3): the window takes no downloads, so the app writes the photo to Downloads.
   document.addEventListener('wayza-save-photo', function (e) {{ var d = e.detail || {{}}, done = function (ok) {{ document.dispatchEvent(new CustomEvent('wayza-saved', {{ detail: {{ ok: ok }} }})); }};
@@ -286,11 +291,12 @@ async fn sign_in_once(h: &AppHandle, app: &Shared) -> Result<()> {
     auth::keep("session", t["session"].as_str().ok_or_else(|| anyhow!("no session"))?)?;
     app.saved.lock().unwrap().me = t["person"]["address"].as_str().map(str::to_string);
     app.save();
-    // The first Mac to sign in runs the person's AI; another one asks with "Use this Mac" (MacAway2).
-    let session = app.session().unwrap();
-    if app.api.get("/me/active-mac", &session).await.map(|v| v["mac"].is_null()).unwrap_or(false) {
-        let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name })).await;
+    // This computer joins your computers. Your first one answers for your AIs at once; another asks once, in the room
+    // ("Answer from this computer too?").
+    if let Err(e) = report(app, true).await {
+        log(&format!("this computer not reported: {e}"));
     }
+    sync_ais(app).await;
     if let (Some(w), Some(enter)) = (window(h), t["enter"].as_str()) {
         let _ = w.navigate(enter.parse()?);
         let _ = w.set_focus();
@@ -314,7 +320,7 @@ async fn bring(h: AppHandle, maker: String, room: Option<String>, ai: Option<Str
 // ais and new_ai: the Claudes ticked in Bring your AI (MultiClaude1, MultiClaude2). None ticked means the first one, as before.
 // others: your other AIs the app runs (Claudes and ChatGPTs), as the page knows them. When this Mac becomes the one in
 // use, it takes them too, so none is left on a Mac that no longer answers (review 1, item 3).
-async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option<String>, ais: Vec<String>, new_ai: Option<Value>, others: Vec<String>) -> Result<()> {
+async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option<String>, ais: Vec<String>, new_ai: Option<Value>, _others: Vec<String>) -> Result<()> {
     if maker != "claude" && maker != "chatgpt" {
         return Err(anyhow!("The Wayza app brings Claude or ChatGPT."));
     }
@@ -329,12 +335,10 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
         push_state(h);
         return Ok(());
     }
-    // Asked once: after a yes, the AI's key is in the Keychain and bringing it to another room needs no page.
+    // Asked once: after a yes, the app runs your Claude, and bringing it to another room needs no page. Every computer
+    // that answers runs the same Claudes (sync_ais), so nothing moves between computers.
     let held = app.saved.lock().unwrap().ai.clone();
-    // A new key here means the old one stops working wherever else it was, so this Mac becomes the one in use, as the
-    // sheet says ("They all answer from this computer"). Before, the other Mac stayed in use with a key that no longer
-    // worked, and nobody answered (Graham, 2 Nov 2026).
-    if app.ai_key().is_none() || held.is_none() || (want.is_some() && want != held) {
+    if held.is_none() || (want.is_some() && want != held) {
         let p = auth::pkce();
         let state = auth::random(24);
         let q = auth::round_trip("bring", &state, |port| {
@@ -343,37 +347,25 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
         })
         .await?;
         let Some(code) = q.get("code") else { return Ok(()) }; // Not now
-        // In use here before the new key, so the Mac it leaves never takes the key back (review 1).
-        if let Some(session) = app.session() {
-            in_use_here(&app, &session).await?;
-        }
         let t = app.api.ai_token(code, &p.verifier).await?;
-        auth::keep("ai:claude", t["key"].as_str().ok_or_else(|| anyhow!("no key"))?)?;
-        app.saved.lock().unwrap().ai = t["address"].as_str().map(str::to_string);
+        app.saved.lock().unwrap().ai = Some(t["address"].as_str().ok_or_else(|| anyhow!("no address"))?.to_string());
         app.saved.lock().unwrap().rooms.clear(); // the old Claude's conversations were its own
         app.save();
         push_state(h);
-        if let Some(session) = app.session() {
-            take_more(&app, &session, &others).await;
-        }
+        sync_ais(&app).await;
     }
     let (Some(room), Some(session), Some(first)) = (room, app.session(), app.saved.lock().unwrap().ai.clone()) else { return Ok(()) };
-    // Which Claudes come in: the ticked ones, getting a key for each the app doesn't run yet, and a new one if asked for.
+    // Which Claudes come in: the ticked ones, each one the app runs from now on, and a new one if asked for.
     let mut bring: Vec<String> = Vec::new();
-    // Taking a Claude here moves the Mac in use first, so the Mac it leaves never takes its key back (review 1).
-    if ais.iter().any(|a| a.len() <= 200 && !app.held().contains(a)) && !this_mac_runs_ai(&app).await {
-        in_use_here(&app, &session).await?;
-        take_more(&app, &session, &others).await;
-    }
     for a in ais.iter().filter(|a| a.len() <= 200) {
         if !app.held().contains(a) {
-            let t = app.api.post("/mac/ais", Some(&session), json!({ "address": a })).await?;
+            let t = app.api.post("/mac/ais", Some(&session), json!({ "address": a, "v": 2 })).await?;
             hold_more(&app, &t)?;
         }
         bring.push(a.clone());
     }
     if let Some(n) = new_ai.filter(|n| n["name"].as_str().map(|x| !x.trim().is_empty()).unwrap_or(false)) {
-        let t = app.api.post("/mac/ais", Some(&session), json!({ "name": n["name"], "about": n["about"] })).await?;
+        let t = app.api.post("/mac/ais", Some(&session), json!({ "name": n["name"], "about": n["about"], "v": 2 })).await?;
         if let Some(a) = hold_more(&app, &t)? {
             bring.push(a);
         }
@@ -393,24 +385,12 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
 
 // ChatGPT, run by the Codex on this computer (MacBring4, MacConsent2): asked once on wayza.com for the first one, then
 // any others the person ticks or makes, as for Claude.
-// Bring your ChatGPT, only on the Mac in use (or with none in use yet), so exactly one Mac answers for each AI.
 async fn bring_gpt(h: &AppHandle, app: &Shared, room: Option<String>, ais: Vec<String>, new_ai: Option<Value>) -> Result<()> {
     if app.codex_state() != claude::State::Ready {
         push_state(h);
         return Ok(());
     }
-    // Another Mac in use runs your Claudes: bringing a ChatGPT here would move them all without their keys, so Use this
-    // Mac comes first (it moves every AI the app runs). With no Mac in use yet, this one becomes it.
-    let session = app.session().ok_or_else(|| anyhow!("Sign in first."))?;
-    let active = app.api.get("/me/active-mac", &session).await?;
-    if !active["mac"].is_null() && active["mac"] != json!(app.mac_id()) {
-        push_state(h);
-        return Err(anyhow!("Your AIs answer from another Mac: Use this Mac first."));
-    }
-    if active["mac"].is_null() {
-        in_use_here(app, &session).await?;
-    }
-    if auth::kept("ai:chatgpt").is_none() || app.saved.lock().unwrap().gpt.is_none() {
+    if app.saved.lock().unwrap().gpt.is_none() {
         let p = auth::pkce();
         let state = auth::random(24);
         let q = auth::round_trip("bring", &state, |port| {
@@ -420,7 +400,6 @@ async fn bring_gpt(h: &AppHandle, app: &Shared, room: Option<String>, ais: Vec<S
         .await?;
         let Some(code) = q.get("code") else { return Ok(()) }; // Not now
         let t = app.api.ai_token(code, &p.verifier).await?;
-        auth::keep("ai:chatgpt", t["key"].as_str().ok_or_else(|| anyhow!("no key"))?)?;
         {
             let mut s = app.saved.lock().unwrap();
             s.gpt = t["address"].as_str().map(str::to_string);
@@ -434,13 +413,13 @@ async fn bring_gpt(h: &AppHandle, app: &Shared, room: Option<String>, ais: Vec<S
     let mut bring: Vec<String> = Vec::new();
     for a in ais.iter().filter(|a| a.len() <= 200) {
         if !app.held().contains(a) {
-            let t = app.api.post("/mac/ais", Some(&session), json!({ "maker": "chatgpt", "address": a })).await?;
+            let t = app.api.post("/mac/ais", Some(&session), json!({ "maker": "chatgpt", "address": a, "v": 2 })).await?;
             hold_more_as(app, &t, "chatgpt")?;
         }
         bring.push(a.clone());
     }
     if let Some(n) = new_ai.filter(|n| n["name"].as_str().map(|x| !x.trim().is_empty()).unwrap_or(false)) {
-        let t = app.api.post("/mac/ais", Some(&session), json!({ "maker": "chatgpt", "name": n["name"], "about": n["about"] })).await?;
+        let t = app.api.post("/mac/ais", Some(&session), json!({ "maker": "chatgpt", "name": n["name"], "about": n["about"], "v": 2 })).await?;
         if let Some(a) = hold_more_as(app, &t, "chatgpt")? {
             bring.push(a);
         }
@@ -458,41 +437,14 @@ async fn bring_gpt(h: &AppHandle, app: &Shared, room: Option<String>, ais: Vec<S
     Ok(())
 }
 
-// A new key for one of the other Claudes this app runs. When wayza.com says it isn't yours any more, the app stops
-// running it.
-// The first Claude too. Only on the Mac in use: the Mac they moved away from never takes them back by itself.
-async fn rekey(app: &Shared, ai: &str) -> bool {
-    let first = app.saved.lock().unwrap().ai.as_deref() == Some(ai);
-    if !app.held().iter().any(|a| a == ai) || !this_mac_runs_ai(app).await {
-        return false;
-    }
-    let Some(session) = app.session() else { return false };
-    let maker = if app.is_gpt(ai) { "chatgpt" } else { "claude" };
-    match app.api.post("/mac/ais", Some(&session), json!({ "maker": maker, "address": ai })).await {
-        Ok(t) => {
-            log(&format!("{ai} had a new key somewhere else; got one again"));
-            if first { hold_first(app, &t).is_ok() } else { hold_more_as(app, &t, maker).is_ok() }
-        }
-        Err(e) => {
-            if !first && e.to_string().ends_with("(403)") {
-                app.saved.lock().unwrap().more.retain(|a| a != ai);
-                auth::forget(&format!("ai:{ai}"));
-                app.save();
-            }
-            log(&format!("Couldn't get {ai} a key again: {e}"));
-            false
-        }
-    }
-}
-
-// Another Claude's key, from wayza.com's answer, into the Keychain; the app runs it from now on.
+// Another of your AIs, from wayza.com's answer: the app runs it from now on.
 fn hold_more(app: &Shared, t: &Value) -> Result<Option<String>> {
     hold_more_as(app, t, "claude")
 }
 fn hold_more_as(app: &Shared, t: &Value, maker: &str) -> Result<Option<String>> {
-    let (Some(addr), Some(key)) = (t["address"].as_str(), t["key"].as_str()) else { return Err(anyhow!("no key")) };
+    let Some(addr) = t["address"].as_str() else { return Err(anyhow!("no address")) };
     let mut s = app.saved.lock().unwrap();
-    // Your first ChatGPT (wayza.com says first, as Use this Mac takes it to a Mac that never ran it) is held as the
+    // Your first ChatGPT (wayza.com says first) is held as the
     // app's ChatGPT, never among the others, so its sign-in is reported and Bring needs no second yes for it.
     if maker == "chatgpt" && t["first"] == true && s.gpt.as_deref() != Some(addr) {
         if let Some(old) = s.gpt.replace(addr.to_string()) {
@@ -504,13 +456,8 @@ fn hold_more_as(app: &Shared, t: &Value, maker: &str) -> Result<Option<String>> 
         s.more.retain(|a| a != addr);
         drop(s);
         app.save();
-        auth::forget(&format!("ai:{addr}"));
-        auth::keep("ai:chatgpt", key)?;
         return Ok(Some(addr.to_string()));
     }
-    drop(s);
-    auth::keep(&format!("ai:{addr}"), key)?;
-    let mut s = app.saved.lock().unwrap();
     if maker == "chatgpt" {
         s.makers.insert(addr.to_string(), "chatgpt".into());
     }
@@ -522,48 +469,115 @@ fn hold_more_as(app: &Shared, t: &Value, maker: &str) -> Result<Option<String>> 
     Ok(Some(addr.to_string()))
 }
 
-// Your first Claude's key, from wayza.com's answer, into the Keychain: the one the app runs first. A different Claude
-// from the one it ran before starts its rooms' conversations afresh, as Bring does.
-fn hold_first(app: &Shared, t: &Value) -> Result<String> {
-    let (Some(addr), Some(key)) = (t["address"].as_str(), t["key"].as_str()) else { return Err(anyhow!("no key")) };
-    auth::keep("ai:claude", key)?;
+// Your AIs the Wayza app runs, as wayza.com lists them (computers.js): every computer that answers runs the same ones,
+// with no Bring of its own. A different first Claude from the one this computer ran starts its rooms afresh, as Bring does.
+async fn sync_ais(app: &Shared) {
+    let Some(session) = app.session() else { return };
+    let v = match app.api.get("/me/computers", &session).await {
+        Ok(v) => v,
+        Err(e) => {
+            log(&format!("your AIs not listed: {e}"));
+            return;
+        }
+    };
+    let Some(list) = v["ais"].as_array() else { return };
     let mut s = app.saved.lock().unwrap();
-    if s.ai.as_deref() != Some(addr) {
-        s.ai = Some(addr.to_string());
+    let first = |m: &str| list.iter().find(|a| a["maker"] == m && a["first"] == true).and_then(|a| a["address"].as_str()).map(str::to_string);
+    let claude = first("claude");
+    if claude.is_some() && s.ai != claude {
+        s.ai = claude;
         s.rooms.clear();
     }
-    if s.more.iter().any(|a| a == addr) {
-        s.more.retain(|a| a != addr);
-        auth::forget(&format!("ai:{addr}"));
-    }
+    s.gpt = first("chatgpt").or(s.gpt.take());
+    let (ai, gpt) = (s.ai.clone(), s.gpt.clone());
+    s.more = list.iter().filter_map(|a| a["address"].as_str()).filter(|a| Some(a.to_string()) != ai && Some(a.to_string()) != gpt).map(str::to_string).collect();
+    s.makers = list.iter().filter(|a| a["maker"] == "chatgpt").filter_map(|a| a["address"].as_str()).map(|a| (a.to_string(), "chatgpt".to_string())).collect();
     drop(s);
     app.save();
-    Ok(addr.to_string())
 }
 
-// Your other app-run Claudes, each with a new key here. One that isn't yours any more is skipped.
-async fn take_more(app: &Shared, session: &str, ais: &[String]) {
-    for a in ais.iter().filter(|a| !a.is_empty() && a.len() <= 200).take(20) {
-        if app.saved.lock().unwrap().ai.as_deref() == Some(a.as_str()) {
-            continue;
-        }
-        // A ChatGPT this app knows is asked for as one; wayza.com names the maker of any other in its answer.
-        let body = if app.is_gpt(a) { json!({ "address": a, "maker": "chatgpt" }) } else { json!({ "address": a }) };
-        match app.api.post("/mac/ais", Some(session), body).await {
-            Ok(t) => {
-                let maker = if t["maker"] == "chatgpt" || app.is_gpt(a) { "chatgpt" } else { "claude" };
-                let _ = hold_more_as(app, &t, maker);
+// This computer tells wayza.com about itself (computers.js): its id and name, whether it's in use now (keyboard or mouse
+// in the last two minutes), and which makers' sign-ins have ended here. An app that signed in before 3 Nov 2026 gets the
+// app's own sign-in in place of its old one the first time; one that can't must sign in again on this computer.
+async fn report(app: &Shared, used: bool) -> Result<()> {
+    let Some(session) = app.session() else { return Ok(()) };
+    let mut b = json!({ "v": 2, "computer": app.mac_id(), "name": app.mac_name, "os": OS, "state": "on", "signed_out": app.signed_out_makers(), "missing": app.missing_makers() });
+    if used {
+        b["used"] = json!(true);
+    }
+    // An older app's sign-in proves it is that app with the AI key it kept in the Keychain, once (wayza.com,
+    // computers.js): then it becomes the app's own, with no new sign-in.
+    if let Some(k) = auth::kept("ai:claude").or_else(|| auth::kept("ai:chatgpt")) {
+        b["key"] = json!(k);
+    }
+    let v = app.api.put("/me/active-mac", &session, b).await?;
+    if let Some(s) = v["session"].as_str() {
+        auth::keep("session", s)?;
+        log("this computer's sign-in is the app's own now");
+    } else if v["how"].as_str().map(|h| h != "mac-app").unwrap_or(false) {
+        return Err(Unauthorized("Sign in again on this computer.".into()).into());
+    }
+    // Keys an app from before kept in the Keychain are no use now.
+    auth::forget("ai:claude");
+    auth::forget("ai:chatgpt");
+    for a in app.saved.lock().unwrap().more.clone() {
+        auth::forget(&format!("ai:{a}"));
+    }
+    Ok(())
+}
+
+// Seconds since the last keyboard or mouse use, from macOS (HIDIdleTime, no permission needed). None elsewhere.
+fn idle_secs() -> Option<u64> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let o = std::process::Command::new("/usr/sbin/ioreg").args(["-c", "IOHIDSystem", "-d", "4"]).output().ok()?;
+    let text = String::from_utf8_lossy(&o.stdout);
+    let line = text.lines().find(|l| l.contains("\"HIDIdleTime\""))?;
+    let ns: u64 = line.rsplit('=').next()?.trim().parse().ok()?;
+    Some(ns / 1_000_000_000)
+}
+
+// Once a minute, while you're using this computer, wayza.com hears it: your AIs answer from the computer you're on.
+// And a sign-in that ended is looked at again: redone anywhere (its mark on disk changed, in Terminal or by a renewal),
+// this computer answers again. (30 minutes on, place() lets the next ask try once instead.)
+async fn activity(h: AppHandle, app: Shared) {
+    // The sign-out each maker's 30-minute try was made for, so each is tried once (build review 5).
+    let mut tried: [Option<std::time::Instant>; 2] = [None, None];
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        let mut try_waiting = false;
+        for gpt in [false, true] {
+            let flag = if gpt { &app.codex_revoked } else { &app.revoked };
+            let at = app.revoked_at.lock().unwrap()[gpt as usize].clone();
+            let mut retry = false;
+            if let (true, Some((when, mark))) = (flag.load(std::sync::atomic::Ordering::SeqCst), at) {
+                retry = signin_mark(&app, gpt) != mark;
+                // 30 minutes on, the asks already waiting are tried here once too, the flag still set (build review 4,
+                // item 3): once for each sign-out, and one catch_up for both makers.
+                let due = !retry && when.elapsed() >= Duration::from_secs(30 * 60) && tried[gpt as usize] != Some(when);
+                if due {
+                    tried[gpt as usize] = Some(when);
+                    try_waiting = true;
+                }
             }
-            Err(e) => log(&format!("{a} not taken to this Mac: {e}")),
+            if retry {
+                log(&format!("{} sign-in may work again: trying", if gpt { "Codex" } else { "Claude Code" }));
+                app.revoked_at.lock().unwrap()[gpt as usize] = None;
+                flag.store(false, std::sync::atomic::Ordering::SeqCst);
+                signed_in_again(&h, &app).await;
+                try_waiting = true; // one catch_up for this tick, whatever asked for it
+            }
+        }
+        if try_waiting {
+            catch_up(&h, &app).await;
+        }
+        if app.session().is_some() && idle_secs().map(|s| s < 120).unwrap_or(false) {
+            if let Err(e) = report(&app, true).await {
+                log(&format!("this computer's use not reported: {e}"));
+            }
         }
     }
-}
-
-// This Mac is the one in use: your Claudes answer from here, and the other Mac stops.
-async fn in_use_here(app: &Shared, session: &str) -> Result<()> {
-    let signed_out = app.signed_out_makers();
-    app.api.put("/me/active-mac", session, json!({ "mac": app.mac_id(), "name": app.mac_name, "state": "on", "signed_out": signed_out })).await?;
-    Ok(())
 }
 
 // ---------- Claude Code missing or signed out (MacNoClaude1, MacSignedOut1) ----------
@@ -578,7 +592,8 @@ fn get_claude_code(h: AppHandle) {
 async fn claude_sign_in(h: AppHandle) {
     let app = h.state::<Shared>().inner().clone();
     let Some(bin) = claude::find(&app.path) else { return };
-    app.revoked.store(false, std::sync::atomic::Ordering::SeqCst); // until Claude Code says otherwise
+    // The flag stays until the sign-in really changes on disk (after_sign_in), so a sign-in never finished doesn't show as
+    // signed in (build review 4, item 2).
     // Only the sign-in, in an empty folder of the app's own: `claude auth login` where this Claude Code has it, so no chat
     // opens and Claude Code never asks to trust the person's home folder (Graham, 2 Nov 2026: it asked to trust
     // /Users/graham just to sign in). An older one without it gets /login, still in that empty folder, which it may ask
@@ -611,7 +626,6 @@ fn codex_sign_in(h: AppHandle) {
     let app = h.state::<Shared>();
     let Some(bin) = codex::find(&app.path) else { return };
     let _ = std::fs::create_dir_all(app.codex_home());
-    app.codex_revoked.store(false, std::sync::atomic::Ordering::SeqCst);
     let cmd = codex::login_command(&bin, &app.codex_home());
     let script = format!("tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell", cmd.replace('\\', "\\\\").replace('"', "\\\""));
     let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
@@ -622,8 +636,12 @@ fn codex_sign_in(h: AppHandle) {
 // After Sign in: once the new sign-in is on this Mac (Claude Code's Keychain entry or credentials file rewritten, the
 // rooms' Codex sign-in file rewritten), wayza.com is told, so the strip and the waiting cards go, and every ask that
 // waited is answered now, as the waiting card says. Watched for 15 minutes; after that the next ask finds out.
+// What a maker's sign-in looks like on disk now (never the secret): a new sign-in or a renewal changes it.
+fn signin_mark(app: &Shared, gpt: bool) -> String {
+    if gpt { std::fs::metadata(app.codex_home().join("auth.json")).and_then(|m| m.modified()).map(|t| format!("{t:?}")).unwrap_or_default() } else { claude::signin_mark() }
+}
 async fn after_sign_in(h: &AppHandle, app: &Shared, gpt: bool) {
-    let mark = |app: &Shared| if gpt { std::fs::metadata(app.codex_home().join("auth.json")).and_then(|m| m.modified()).map(|t| format!("{t:?}")).unwrap_or_default() } else { claude::signin_mark() };
+    let mark = |app: &Shared| signin_mark(app, gpt);
     // Every change counts, for the whole 15 minutes: a change can come before the sign-in has finished (or from another
     // Claude Code renewing it), and the asks it tries then fail again, so the next change tries again (fresh review 2).
     let mut before = mark(app);
@@ -640,59 +658,27 @@ async fn after_sign_in(h: &AppHandle, app: &Shared, gpt: bool) {
     }
 }
 
-// The sign-in works again: the page and wayza.com hear it (only from the Mac in use, so this never takes over from
-// another Mac).
+// The sign-in works again: the page and wayza.com hear it, so this computer answers again.
 async fn signed_in_again(h: &AppHandle, app: &Shared) {
     push_state(h);
-    let Some(session) = app.session() else { return };
-    if !this_mac_runs_ai(app).await {
-        return;
+    if let Err(e) = report(app, false).await {
+        log(&format!("this computer not reported: {e}"));
     }
-    let out = app.signed_out_makers();
-    let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "signed_out": out })).await;
 }
 
-// ---------- Use this Mac (MacAway2) ----------
+// ---------- Answer from this computer too? (the room page's sheet, AllPC1) ----------
 
+// The person answered on the room page, which told wayza.com. This computer runs the same AIs as the others from now on
+// (or stops), and answers any ask that waited.
 #[tauri::command]
-// ai: your Claude, as the room page knows it; ais: your other Claudes the Wayza app runs. This Mac takes their keys,
-// whether it ran them before or never did: the Mac they move from may hold newer keys by now, and a Mac that never ran
-// them has none (Graham, 2 Nov 2026: the strip shows on every Mac that isn't the one in use). The keys the other Mac had
-// stop working, so only this Mac answers from now on.
-async fn use_this_mac(h: AppHandle, ai: Option<String>, ais: Option<Vec<String>>) -> Result<(), String> {
+async fn computer_answer(h: AppHandle, said_yes: bool) {
     let app = h.state::<Shared>().inner().clone();
-    let session = app.session().ok_or("Sign in first.")?;
-    // Nothing moves unless an AI could answer here: Claude Code ready for your Claude, or, for someone whose only app AI
-    // is a ChatGPT, Codex ready. Otherwise the page shows how to get it or sign in (MacNoClaude1, MacSignedOut1,
-    // MacNoCodex1, MacSignedOutCodex1), and the other Mac keeps answering (review 2).
-    // The page names your Claude, or sends none with your other AIs when your only app AI is a ChatGPT; only a page that
-    // sends neither (an older one) falls back to the Claude this Mac remembers.
-    let ais = ais.unwrap_or_default();
-    let want = ai.filter(|a| !a.is_empty() && a.len() <= 200).or_else(|| if ais.is_empty() { app.saved.lock().unwrap().ai.clone() } else { None });
-    let ready = if want.is_some() { app.claude_state() == claude::State::Ready } else { app.codex_state() == claude::State::Ready };
-    if !ready {
-        push_state(&h);
-        return Err(if want.is_some() { "Claude Code isn't ready on this Mac." } else { "Codex isn't ready on this Mac." }.into());
-    }
-    // In use first, then the keys: the Mac they leave stops answering before its keys stop working, so it never takes
-    // them back (review 1).
-    in_use_here(&app, &session).await.map_err(|e| e.to_string())?;
-    if let Some(a) = want {
-        let t = app.api.post("/mac/ais", Some(&session), json!({ "address": a })).await.map_err(|e| e.to_string())?;
-        let got = hold_first(&app, &t).map_err(|e| e.to_string())?;
-        log(&format!("use this Mac: runs {got} here now"));
-    }
-    take_more(&app, &session, &ais).await;
+    log(if said_yes { "this computer answers for your AIs now" } else { "this computer doesn't answer for your AIs" });
+    sync_ais(&app).await;
     push_state(&h);
-    // Asks that came while the other Mac ran your AIs (or none did) are answered here now.
-    {
-        let (h2, app2) = (h.clone(), app.clone());
-        tauri::async_runtime::spawn(async move { catch_up(&h2, &app2).await });
+    if said_yes {
+        catch_up(&h, &app).await;
     }
-    if let Some(w) = window(&h) {
-        let _ = w.eval("location.reload()");
-    }
-    Ok(())
 }
 
 // ---------- the account's live socket: wake Claude, banners, the Dock ----------
@@ -731,10 +717,14 @@ async fn live(h: AppHandle) {
     }
 }
 
-async fn listen(h: &AppHandle, app: &Shared, session: &str, opened: &mut bool) -> Result<()> {
+async fn listen(h: &AppHandle, app: &Shared, _session: &str, opened: &mut bool) -> Result<()> {
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::Message;
-    let t = app.api.post("/me/live-ticket", Some(session), json!({})).await?;
+    // This computer says where it is first, so the socket it opens counts as it being on (computers.js).
+    report(app, false).await?;
+    sync_ais(app).await;
+    let Some(session) = app.session() else { return Err(Unauthorized("Sign in again.".into()).into()) };
+    let t = app.api.post("/me/live-ticket", Some(&session), json!({})).await?;
     let (mut ws, _) = tokio_tungstenite::connect_async(t["url"].as_str().ok_or_else(|| anyhow!("no url"))?).await?;
     *opened = true;
     log("account socket open");
@@ -809,14 +799,13 @@ async fn catch_up(h: &AppHandle, app: &Shared) {
         .map(|a| a.iter().filter_map(|x| Some((x["room"].as_str()?.to_string(), x["ai"].as_str()?.to_string(), x["message"].as_str()?.to_string()))).collect())
         .unwrap_or_default();
     let asks: Vec<(String, String, String)> = asks.into_iter().filter(|(_, ai, _)| held.iter().any(|a| a == ai)).collect();
-    if asks.is_empty() || !this_mac_runs_ai(app).await {
-        return;
-    }
     for (room, ai, _) in asks {
-        // A Claude already answering there takes it in its next turn (answer() notes that more came).
-        log(&format!("missed ask in {room}: {ai} answers it now"));
+        // Only a computer in the order answers, in its place (computers.js); taking the turn claims it, so each ask is
+        // answered once. A Claude already answering there takes it in its next turn (answer() notes that more came).
+        let Some(n) = place(app, &v["orders"], &ai) else { continue };
+        log(&format!("missed ask in {room}: {ai} answers it {}", if n == 0 { "now".to_string() } else { format!("in place {}", n + 1) }));
         let (h2, app2) = (h.clone(), app.clone());
-        tauri::async_runtime::spawn(async move { answer(&h2, &app2, &room, false, &ai).await });
+        tauri::async_runtime::spawn(async move { in_place(&h2, &app2, &room, false, &ai, n).await });
     }
 }
 
@@ -966,8 +955,21 @@ fn route(u: &url::Url) -> Route {
 
 // The wayza.com pages the app window shows: Rooms (and the invite links into them), records, and your account.
 fn in_window(path: &str) -> bool {
-    path == "/account" || ["/account/", "/rooms/", "/records/"].iter().any(|p| path.starts_with(p))
+    // Pages wayza.com keeps from the app's own window (window-sessions.js there) open in your web browser instead:
+    // deleting the account, claiming an AI, and anything under /account the window doesn't use (build review 6).
+    let p = path.trim_end_matches('/');
+    let window_account = p == "/account"
+        || p == "/account/rooms" || p.starts_with("/account/rooms/")
+        || p.starts_with("/account/sign")
+        || ["/account/photo", "/account/turned-away", "/account/me.json"].contains(&p)
+        || (p.starts_with("/account/") && !p[9..].contains('/') && ACCOUNT_TABS.contains(&&p[9..]));
+    if p == "/account/rooms/mac/signin" || p == "/account/rooms/mac/bring" {
+        return false;
+    }
+    window_account || ["/rooms/", "/records/"].iter().any(|x| path.starts_with(x))
 }
+// The account page's sections (dashboard.js TABS on wayza.com).
+const ACCOUNT_TABS: &[&str] = &["front-door", "messages", "requests", "reach", "picture", "ais", "apps", "computers", "meet", "activity", "feedback", "security"];
 
 fn passport_url(address: &str) -> Option<String> {
     let a = address.trim();
@@ -995,11 +997,7 @@ fn notification_settings(h: AppHandle) {
 async fn sign_out(h: AppHandle) {
     let app = h.state::<Shared>().inner().clone();
     if let Some(session) = app.session() {
-        // Only when this Mac is the one running your Claude: the PUT makes its Mac the active one, so from here it
-        // would take your Claude away from your other Mac.
-        if this_mac_runs_ai(&app).await {
-            let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "signed_out": ["claude", "chatgpt"] })).await;
-        }
+        // Its session ends on wayza.com, so this computer leaves your computers and the next one answers.
         let _ = app.api.delete("/me/session", &session).await;
     }
     auth::forget("ai:claude");
@@ -1043,18 +1041,19 @@ async fn on_event(h: &AppHandle, app: &Shared, ev: Value) {
             if asked.is_empty() {
                 return;
             }
-            if this_mac_runs_ai(app).await {
-                for ai in asked {
-                    let (h2, app2, room2) = (h.clone(), app.clone(), room.clone());
-                    tauri::async_runtime::spawn(async move { answer(&h2, &app2, &room2, false, &ai).await });
-                }
-            } else {
-                log("not answering: Claude runs on another Mac");
+            for ai in asked {
+                let Some(n) = place(app, &ev["orders"], &ai) else {
+                    log(&format!("not answering as {ai}: another computer of yours does"));
+                    continue;
+                };
+                let (h2, app2, room2) = (h.clone(), app.clone(), room.clone());
+                tauri::async_runtime::spawn(async move { in_place(&h2, &app2, &room2, false, &ai, n).await });
             }
         }
         Some("side") if ev["ai"].as_str().map(|a| held.iter().any(|x| x == a)).unwrap_or(false) => {
-            if this_mac_runs_ai(app).await {
-                answer(h, app, &room, true, ev["ai"].as_str().unwrap_or("")).await;
+            let ai = ev["ai"].as_str().unwrap_or("").to_string();
+            if let Some(n) = place(app, &ev["orders"], &ai) {
+                in_place(h, app, &room, true, &ai, n).await;
             }
         }
         Some("message") => {
@@ -1081,9 +1080,26 @@ async fn on_event(h: &AppHandle, app: &Shared, ev: Value) {
     }
 }
 
-async fn this_mac_runs_ai(app: &Shared) -> bool {
-    let Some(session) = app.session() else { return false };
-    app.api.get("/me/active-mac", &session).await.map(|v| v["mac"] == json!(app.mac_id())).unwrap_or(false)
+// This computer's place in the order wayza.com sent for the AI's maker (computers.js): 0 tries at once, 1 after 20
+// seconds, 2 after 40. None: another computer of yours answers (this one said no, or its sign-in for that maker ended).
+fn place(app: &Shared, orders: &Value, ai: &str) -> Option<usize> {
+    let gpt = app.is_gpt(ai);
+    let maker = if gpt { "chatgpt" } else { "claude" };
+    // Its sign-in here has ended: wayza.com hears it from report() and leaves this computer out, so it doesn't try.
+    // 30 minutes on, the next ask is tried here once, after every computer in the order has had its turn, in case the
+    // sign-in never really ended (a 401 that passed); it still shows as signed out until a turn works (build review 3,
+    // item 2). A sign-in redone on disk is noticed sooner (activity()).
+    if if gpt { &app.codex_revoked } else { &app.revoked }.load(std::sync::atomic::Ordering::SeqCst) {
+        let due = app.revoked_at.lock().unwrap()[gpt as usize].as_ref().map(|(at, _)| at.elapsed() >= Duration::from_secs(30 * 60)).unwrap_or(true);
+        return due.then(|| orders[maker].as_array().map(|a| a.len()).unwrap_or(0));
+    }
+    orders[maker].as_array()?.iter().position(|c| c == &json!(app.mac_id()))
+}
+async fn in_place(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str, n: usize) {
+    if n > 0 {
+        tokio::time::sleep(Duration::from_secs(20 * n.min(9) as u64)).await;
+    }
+    answer(h, app, room, side, ai).await;
 }
 
 // A banner only when someone wants you: a mention or a reply to you, or everything if the room's bell says so (Notify4, MacNotify1).
@@ -1166,12 +1182,9 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
         }
         b.insert(key.clone(), false);
     }
+    let gpt = app.is_gpt(ai);
+    let ran_before = app.ran[gpt as usize].load(std::sync::atomic::Ordering::SeqCst);
     let mut r = turn(app, room, side, ai).await;
-    // Another Claude whose key no longer works (another computer, or anything else holding that key, got a new one):
-    // the app asks for a key again with your session, and tries once more, as the first Claude does through its yes.
-    if r.as_ref().err().map(|e| e.downcast_ref::<Unauthorized>().is_some()).unwrap_or(false) && rekey(app, ai).await {
-        r = turn(app, room, side, ai).await;
-    }
     loop {
         let again = {
             let mut b = app.busy.lock().unwrap();
@@ -1189,34 +1202,39 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
         r = turn(app, room, side, ai).await;
     }
     // Each maker's sign-in on its own: Claude Code's for Claudes, the rooms' Codex sign-in for ChatGPTs.
-    let gpt = app.is_gpt(ai);
     let flag = if gpt { &app.codex_revoked } else { &app.revoked };
     // It answered, so its sign-in works: a "signed out" this Mac told wayza.com before is taken back, so the strip, the
     // footer and the waiting cards go (Graham, 2 Nov 2026: they stayed after Claude answered again).
-    // wayza.com is asked too, not only this app's own flag: Sign in clears the flag at once, and a restart forgets it, while
+    // wayza.com is asked too, not only this app's own flag: a sign-in redone clears the flag, and a restart forgets it, while
     // wayza.com still says signed out (fresh review 1).
-    if r.is_ok() {
-        let was = flag.swap(false, std::sync::atomic::Ordering::SeqCst);
-        let held = match app.session() {
-            Some(session) if !was => app.api.get("/me/active-mac", &session).await.map(|v| v["mac"] == json!(app.mac_id()) && v["signed_out"].as_array().map(|a| a.iter().any(|m| m == if gpt { "chatgpt" } else { "claude" })).unwrap_or(false)).unwrap_or(false),
-            _ => false,
-        };
-        if was || held {
-            signed_in_again(h, app).await;
-        }
+    // (This computer tells wayza.com its sign-ins each time its socket opens, so a restart can't leave one stale.)
+    // Only a turn that really ran proves it: one that found nothing to answer, or another computer answering, doesn't.
+    let ran = app.ran[gpt as usize].load(std::sync::atomic::Ordering::SeqCst) != ran_before;
+    if r.is_ok() && ran && flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        app.revoked_at.lock().unwrap()[gpt as usize] = None;
+        signed_in_again(h, app).await;
     }
     if let Err(e) = r {
         // A sign-in that has ended shows as signed out (MacSignedOut1, MacSignedOutCodex1), even when the program's own
         // files still look signed in.
+        // (A try 30 minutes on that fails again waits another 30 minutes.)
         if e.downcast_ref::<claude::SignedOut>().is_some() {
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            app.revoked_at.lock().unwrap()[gpt as usize] = Some((std::time::Instant::now(), signin_mark(app, gpt)));
         }
         let out = app.signed_out_makers();
         if out.contains(&if gpt { "chatgpt" } else { "claude" }) {
-            if let Some(session) = app.session() {
-                let _ = app.api.put("/me/active-mac", &session, json!({ "mac": app.mac_id(), "name": app.mac_name, "signed_out": out })).await;
+            // wayza.com hears it first: it lets go of this computer's turn and sends the ask to your next computer at
+            // once, with this one left out of the order (build review 1, item 3).
+            if let Err(e) = report(app, false).await {
+                log(&format!("this computer not reported: {e}"));
             }
             push_state(h);
+        }
+        // A turn that ended without answering lets go of it, so another computer of yours can (computers.js). Only the
+        // computer holding the turn can; for any other (and after the report above, which already let go) it does nothing.
+        if let Some(key) = app.key_for(ai) {
+            let _ = app.api.delete(&format!("/rooms/{}/{}", enc(room), if side { "side" } else { "turn" }), &key).await;
         }
         log(&format!("{} couldn't answer in {room}: {e}", if gpt { "ChatGPT" } else { "Claude" }));
     }
@@ -1275,7 +1293,10 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
     // The message this turn answers, and how far it reads (both from wayza.com; a side turn has neither).
     let mut ask_id: Option<String> = None;
     let mut upto: Option<String> = None;
+    let mut fresh = false;
     let (prompt, resume) = if side {
+        // Another computer of yours is answering it (held: no messages), or answered last (fresh: a new conversation
+        // here, with the side chat so far).
         let s = app.api.get(&format!("/rooms/{}/side", enc(room)), &key).await?;
         let msgs = s["messages"].as_array().cloned().unwrap_or_default();
         let Some(last) = msgs.last() else { return Ok(()) };
@@ -1283,24 +1304,35 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
             return Ok(());
         }
         let m = json!({ "room": room_name, "from": { "name": owner, "address": owner_addr }, "text": last["text"] });
-        (format!("{owner} writes to you in your private side chat (JSON):\n{m}"), saved.side_session.clone())
+        if s["fresh"] == true {
+            let before: Vec<String> = msgs[..msgs.len() - 1].iter().rev().take(40).rev().map(|x| json!({ "from": if x["from"] == "person" { owner.as_str() } else { "you said" }, "text": x["text"] }).to_string()).collect();
+            (format!("Your private side chat with {owner} so far, from another of their computers (JSON, one per line; \"you said\" is you):\n{}\n\n{owner} writes to you now (JSON):\n{m}", before.join("\n")), None)
+        } else {
+            (format!("{owner} writes to you in your private side chat (JSON):\n{m}"), saved.side_session.clone())
+        }
     } else {
         // wayza.com decides what to answer: the newest message that asks this Claude and that it hasn't read, the
         // messages since its read position (the newest 40 at most, with the ask always among them), and how far this
         // turn reads. Nothing that asks it, and no turn runs. Nothing about what it has read is kept on this Mac.
         let t = app.api.get(&format!("/rooms/{}/turn", enc(room)), &key).await?;
         let Some(ask) = t["ask"].as_str().map(str::to_string) else { return Ok(()) };
+        // Another computer of yours took this AI's last turn here: this computer's conversation is missing it, so it
+        // starts a new one from the room's newest messages, its own earlier words among them, marked you_said.
+        fresh = t["fresh"] == true;
         ask_id = Some(ask.clone());
         upto = t["upto"].as_str().map(str::to_string);
         let msgs = t["messages"].as_array().cloned().unwrap_or_default();
         let mut shown: Vec<(String, String, String)> = Vec::new();
         let lines: Vec<String> = msgs
             .iter()
-            .filter(|m| m["from"]["address"] != json!(ai_addr) && (m["text"].as_str().map(|t| !t.is_empty()).unwrap_or(false) || m["files"].as_array().map(|f| !f.is_empty()).unwrap_or(false)))
+            .filter(|m| (fresh || m["from"]["address"] != json!(ai_addr)) && (m["text"].as_str().map(|t| !t.is_empty()).unwrap_or(false) || m["files"].as_array().map(|f| !f.is_empty()).unwrap_or(false)))
             .collect::<Vec<_>>()
             .into_iter()
             .map(|m| {
                 let mut o = json!({ "from": { "name": m["from"]["name"], "address": m["from"]["address"], "kind": m["from"]["kind"] }, "text": m["text"], "at": m["at"] });
+                if m["from"]["address"] == json!(ai_addr) {
+                    o["you_said"] = json!(true);
+                }
                 // Every message that asks it, not only the one it answers: after a while away it sees all it was asked.
                 if m["wants"].as_array().map(|w| w.iter().any(|x| x == &json!(ai_addr))).unwrap_or(false) {
                     o["asks_you"] = json!(true);
@@ -1366,8 +1398,9 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
             String::new()
         };
         (
-            format!("Who is in the room {} now (JSON): {}\n\nNew messages there, one JSON object per line, each with when it was sent (UTC). Those with asks_you ask you; answer them all in one message.\n{}\n{note}{when}\nAnswer as one chat message.", q(&room_name), who, lines.join("\n")),
-            saved.session.clone(),
+            format!("Who is in the room {} now (JSON): {}\n\n{}, one JSON object per line, each with when it was sent (UTC). Those with asks_you ask you; answer them all in one message.\n{}\n{note}{when}\nAnswer as one chat message.", q(&room_name), who,
+                if fresh { "The room's newest messages (you answered here before from another of your person's computers; those with you_said are your own words)" } else { "New messages there" }, lines.join("\n")),
+            if fresh { None } else { saved.session.clone() },
         )
     };
 
@@ -1379,7 +1412,7 @@ async fn turn(app: &Shared, room: &str, side: bool, ai: &str) -> Result<()> {
         _ => claude::Tools::Web,
     };
     let computer = matches!(tools, claude::Tools::Computer) && !side;
-    let resume = if computer { saved.computer_session.clone() } else { resume };
+    let resume = if computer && !fresh { saved.computer_session.clone() } else if computer { None } else { resume };
     let can = match tools {
         claude::Tools::Words => "You have no tools here: you can't see, run or change anything on this computer, its files or the web, so never offer or start to; just answer in words, and say plainly when something needs tools.",
         claude::Tools::Web => "You can search the web and read web pages. Nothing on this computer: you can't see, run or change its files, so never offer or start to.",
@@ -1643,12 +1676,16 @@ fn failed_words(gpt: bool, why: &str) -> String {
 // bubble, a named gap), Claude Code for every other AI.
 #[allow(clippy::too_many_arguments)]
 async fn ai_run(app: &Shared, gpt: bool, cwd: &PathBuf, system: &str, prompt: &str, images: &[claude::Image], tools: claude::Tools, room_cfg: Option<&PathBuf>, room_pass: Option<&str>, resume: Option<&str>, on_text: impl FnMut(&str)) -> Result<claude::Run> {
-    if gpt {
+    let r = if gpt {
         let room = room_pass.map(|p| codex::Room { url: format!("{}/wayza/mcp", app.api.base.trim_end_matches('/')), pass: p });
         codex::run(&app.path, &app.codex_home(), cwd, system, prompt, images, tools, room, resume).await
     } else {
         claude::run(&app.path, cwd, system, prompt, images, tools, room_cfg, resume, on_text).await
+    };
+    if r.is_ok() {
+        app.ran[gpt as usize].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
+    r
 }
 
 // The turn is over: the pass stops working on wayza.com, and its file goes.
@@ -1665,7 +1702,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, get_codex, codex_sign_in, use_this_mac, open_help, open_passport, save_photo, notification_settings, sign_out])
+        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, get_codex, codex_sign_in, computer_answer, open_help, open_passport, save_photo, notification_settings, sign_out])
         .setup(|a| {
             let dir = a.path().app_config_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -1683,6 +1720,8 @@ fn main() {
                 signing_in: std::sync::atomic::AtomicBool::new(false),
                 revoked: std::sync::atomic::AtomicBool::new(false),
                 codex_revoked: std::sync::atomic::AtomicBool::new(false),
+                revoked_at: Mutex::new([None, None]),
+                ran: [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)],
                 live: tokio::sync::Notify::new(),
                 help: Mutex::new((String::new(), None)),
             });
@@ -1728,6 +1767,7 @@ fn main() {
             });
             a.manage(app);
             tauri::async_runtime::spawn(live(a.handle().clone()));
+            tauri::async_runtime::spawn(activity(a.handle().clone(), a.state::<Shared>().inner().clone()));
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -1740,10 +1780,11 @@ mod tests {
 
     #[test]
     fn only_rooms_and_account_stay_in_the_window() {
-        for p in ["/account", "/account/reach", "/account/rooms/room_1", "/rooms/join/abc", "/records/x"] {
+        for p in ["/account", "/account/reach", "/account/security", "/account/photo", "/account/rooms/room_1", "/rooms/join/abc", "/records/x"] {
             assert!(in_window(p), "{p}");
         }
-        for p in ["/", "/docs/", "/developers/", "/live", "/help/", "/passport/maya", "/accounts", "/roomsx"] {
+        for p in ["/", "/docs/", "/developers/", "/live", "/help/", "/passport/maya", "/accounts", "/roomsx", "/account/delete", "/account/agent-claim",
+            "/account/claim/abc", "/account/stats", "/account/notify", "/account/rooms/mac/signin", "/account/rooms/mac/bring", "/account/somewhere-new"] {
             assert!(!in_window(p), "{p}");
         }
     }
