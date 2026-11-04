@@ -960,7 +960,6 @@ fn in_window(path: &str) -> bool {
     let p = path.trim_end_matches('/');
     let window_account = p == "/account"
         || p == "/account/rooms" || p.starts_with("/account/rooms/")
-        || p.starts_with("/account/notify")
         || p.starts_with("/account/sign")
         || ["/account/photo", "/account/turned-away", "/account/me.json"].contains(&p)
         || (p.starts_with("/account/") && !p[9..].contains('/') && ACCOUNT_TABS.contains(&&p[9..]));
@@ -1781,11 +1780,11 @@ mod tests {
 
     #[test]
     fn only_rooms_and_account_stay_in_the_window() {
-        for p in ["/account", "/account/reach", "/account/security", "/account/photo", "/account/notify", "/account/rooms/room_1", "/rooms/join/abc", "/records/x"] {
+        for p in ["/account", "/account/reach", "/account/security", "/account/photo", "/account/rooms/room_1", "/rooms/join/abc", "/records/x"] {
             assert!(in_window(p), "{p}");
         }
         for p in ["/", "/docs/", "/developers/", "/live", "/help/", "/passport/maya", "/accounts", "/roomsx", "/account/delete", "/account/agent-claim",
-            "/account/claim/abc", "/account/stats", "/account/rooms/mac/signin", "/account/rooms/mac/bring", "/account/somewhere-new"] {
+            "/account/claim/abc", "/account/stats", "/account/notify", "/account/rooms/mac/signin", "/account/rooms/mac/bring", "/account/somewhere-new"] {
             assert!(!in_window(p), "{p}");
         }
     }
