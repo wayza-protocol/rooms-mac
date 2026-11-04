@@ -542,18 +542,24 @@ fn idle_secs() -> Option<u64> {
 // And a sign-in that ended is looked at again: redone anywhere (its mark on disk changed, in Terminal or by a renewal),
 // this computer answers again. (30 minutes on, place() lets the next ask try once instead.)
 async fn activity(h: AppHandle, app: Shared) {
+    // The sign-out each maker's 30-minute try was made for, so each is tried once (build review 5).
+    let mut tried: [Option<std::time::Instant>; 2] = [None, None];
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
+        let mut try_waiting = false;
         for gpt in [false, true] {
             let flag = if gpt { &app.codex_revoked } else { &app.revoked };
             let at = app.revoked_at.lock().unwrap()[gpt as usize].clone();
-            let (retry, due) = match (flag.load(std::sync::atomic::Ordering::SeqCst), at) {
-                (true, Some((when, mark))) => (signin_mark(&app, gpt) != mark, (30 * 60..32 * 60).contains(&when.elapsed().as_secs())),
-                _ => (false, false),
-            };
-            // 30 minutes on, the asks already waiting are tried here once too, the flag still set (build review 4, item 3).
-            if due && !retry {
-                catch_up(&h, &app).await;
+            let mut retry = false;
+            if let (true, Some((when, mark))) = (flag.load(std::sync::atomic::Ordering::SeqCst), at) {
+                retry = signin_mark(&app, gpt) != mark;
+                // 30 minutes on, the asks already waiting are tried here once too, the flag still set (build review 4,
+                // item 3): once for each sign-out, and one catch_up for both makers.
+                let due = !retry && when.elapsed() >= Duration::from_secs(30 * 60) && tried[gpt as usize] != Some(when);
+                if due {
+                    tried[gpt as usize] = Some(when);
+                    try_waiting = true;
+                }
             }
             if retry {
                 log(&format!("{} sign-in may work again: trying", if gpt { "Codex" } else { "Claude Code" }));
@@ -562,6 +568,9 @@ async fn activity(h: AppHandle, app: Shared) {
                 signed_in_again(&h, &app).await;
                 catch_up(&h, &app).await;
             }
+        }
+        if try_waiting {
+            catch_up(&h, &app).await;
         }
         if app.session().is_some() && idle_secs().map(|s| s < 120).unwrap_or(false) {
             if let Err(e) = report(&app, true).await {
@@ -1183,7 +1192,7 @@ async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
     let flag = if gpt { &app.codex_revoked } else { &app.revoked };
     // It answered, so its sign-in works: a "signed out" this Mac told wayza.com before is taken back, so the strip, the
     // footer and the waiting cards go (Graham, 2 Nov 2026: they stayed after Claude answered again).
-    // wayza.com is asked too, not only this app's own flag: Sign in clears the flag at once, and a restart forgets it, while
+    // wayza.com is asked too, not only this app's own flag: a sign-in redone clears the flag, and a restart forgets it, while
     // wayza.com still says signed out (fresh review 1).
     // (This computer tells wayza.com its sign-ins each time its socket opens, so a restart can't leave one stale.)
     // Only a turn that really ran proves it: one that found nothing to answer, or another computer answering, doesn't.
