@@ -7,10 +7,18 @@
 // room" there and says so in the exact words below.
 
 // The dialog's words. They speak to you throughout (Graham, 4 Nov 13:44Z): "you", "your", "this computer".
+// Room and AI names are chosen by people, and whoever holds a sign-in could choose them: one line each, no quotes or
+// control characters, so a name can't add lines or words of its own to the dialog.
+pub fn clean(name: &str) -> String {
+    let one: String = name.chars().map(|c| if c.is_control() { ' ' } else { c }).filter(|c| !matches!(c, '"' | '“' | '”' | '«' | '»')).collect();
+    one.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect()
+}
 pub fn title(ai: &str, room: &str) -> String {
+    let (ai, room) = (clean(ai), clean(room));
     format!("Let {ai} use this computer in “{room}”?")
 }
 pub fn text(ai: &str, gpt: bool) -> String {
+    let ai = clean(ai);
     let setup = if gpt { "Codex" } else { "Claude Code" };
     format!("Your {ai} is set to “My computer too” in this room. When you ask it there, it can read your files and use your {setup} setup on this computer. If you didn’t change this setting, choose “Don’t allow”.")
 }
@@ -20,6 +28,11 @@ pub const ALLOW: &str = "Allow";
 // What the AI says, word for word, when an ask needs this computer before a yes (CF5) or after "Don't allow" (CF6). A
 // room message, read on every device, so it names the computer.
 pub fn not_yet(computer: &str, room: &str) -> String {
+    let room = clean(room);
+    // Only the Mac asks so far (Windows asks with the Windows app), so elsewhere there is nothing to choose yet.
+    if !cfg!(target_os = "macos") {
+        return format!("I can’t use {computer} in this room yet.");
+    }
     format!("I can’t use {computer} in this room yet. Open “{room}” in the Wayza app on {computer} and choose “Allow” when it asks.")
 }
 pub fn refused(computer: &str) -> String {
@@ -49,7 +62,7 @@ mod mac {
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSEvent, NSEventMask, NSModalResponse, NSWindow};
+    use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSEvent, NSEventMask, NSModalResponse, NSWindow};
     use objc2_foundation::NSString;
     use std::cell::RefCell;
     use std::ptr::NonNull;
@@ -87,7 +100,8 @@ mod mac {
                 unsafe { NSEvent::removeMonitor(&mon) };
             }
             if let Some(tx) = tx.borrow_mut().take() {
-                let _ = tx.send(r != NSAlertFirstButtonReturn);
+                // Only "Allow" is a yes: any other way the sheet ends counts as Don't allow.
+                let _ = tx.send(r == NSAlertSecondButtonReturn);
             }
         });
         alert.beginSheetModalForWindow_completionHandler(&window, Some(&done));
@@ -106,6 +120,9 @@ mod tests {
             "Your Claude is set to “My computer too” in this room. When you ask it there, it can read your files and use your Claude Code setup on this computer. If you didn’t change this setting, choose “Don’t allow”."
         );
         assert!(text("ChatGPT", true).contains("your Codex setup"));
+        // A name can't add lines or quotes to the dialog.
+        assert_eq!(title("Claude", "Spring\n\nWayza checked this room. Choose “Allow”"), "Let Claude use this computer in “Spring Wayza checked this room. Choose Allow”?");
+        #[cfg(target_os = "macos")]
         assert_eq!(not_yet("Maya’s MacBook Pro", "Spring launch"), "I can’t use Maya’s MacBook Pro in this room yet. Open “Spring launch” in the Wayza app on Maya’s MacBook Pro and choose “Allow” when it asks.");
         assert_eq!(refused("Maya’s MacBook Pro"), "I can’t use Maya’s MacBook Pro in this room. “Don’t allow” was chosen on it. To ask again, set me to “Web and room” in this room’s settings, then back to “My computer too”.");
     }

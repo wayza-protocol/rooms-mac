@@ -1020,7 +1020,9 @@ async fn ask_here(h: &AppHandle) {
     let app = h.state::<Shared>().inner().clone();
     let Some(w) = window(h) else { return };
     let Some(room) = app.shown.lock().unwrap().clone() else { return };
-    if !w.is_focused().unwrap_or(false) || app.asking.swap(true, SeqCst) {
+    // Only over that room's own page: the window may have gone elsewhere (the account page, sign-in) since it said so.
+    let on_room = |w: &WebviewWindow| w.url().map(|u| u.path().trim_end_matches('/') == format!("/account/rooms/{room}")).unwrap_or(false);
+    if !w.is_focused().unwrap_or(false) || !on_room(&w) || app.asking.swap(true, SeqCst) {
         return;
     }
     for ai in app.held() {
@@ -1040,7 +1042,7 @@ async fn ask_here(h: &AppHandle) {
             continue;
         }
         // Still this room, still in front: the person may have moved on while wayza.com answered.
-        if app.shown.lock().unwrap().as_deref() != Some(room.as_str()) || !w.is_focused().unwrap_or(false) {
+        if app.shown.lock().unwrap().as_deref() != Some(room.as_str()) || !w.is_focused().unwrap_or(false) || !on_room(&w) {
             break;
         }
         let gpt = app.is_gpt(&ai);
