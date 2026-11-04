@@ -1095,6 +1095,12 @@ async fn sign_out(h: AppHandle) {
 // The session ended (signed out, a new password, 30 days): back to MacFirst1.
 fn signed_out(h: &AppHandle) {
     auth::forget("session");
+    // However the sign-in ended, this computer's yeses to "My computer too" go with it (ask.rs).
+    {
+        let app = h.state::<Shared>();
+        app.saved.lock().unwrap().computer.clear();
+        app.save();
+    }
     if let Some(w) = window(h) {
         let _ = w.navigate("tauri://localhost/index.html".parse().unwrap());
     }
@@ -1246,12 +1252,6 @@ async fn badge(h: &AppHandle, app: &Shared) {
 // ---------- Claude answering, in a room or in the person's side chat ----------
 
 async fn answer(h: &AppHandle, app: &Shared, room: &str, side: bool, ai: &str) {
-    // A room switched to "My computer too" elsewhere while it was open here in front: ask now, not only when the window
-    // next comes to the front (ask_here checks the setting, the window and the page itself).
-    {
-        let h = h.clone();
-        tauri::async_runtime::spawn(async move { ask_here(&h).await });
-    }
     let key = format!("{ai}|{room}{}", if side { "#side" } else { "" });
     {
         let mut b = app.busy.lock().unwrap();

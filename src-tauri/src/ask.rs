@@ -8,18 +8,15 @@
 
 // The dialog's words. They speak to you throughout (Graham, 4 Nov 13:44Z): "you", "your", "this computer".
 // Room and AI names are chosen by people, and whoever holds a sign-in could choose them. In the dialog each is one
-// line in quotes: no control or invisible format characters (direction overrides, zero-width marks), and no double
-// quote of any kind, which becomes a plain apostrophe, so a name can't close its quotes and add words of its own.
-// wayza.com caps names at 80; anything longer is a name it never made, so the cap here never cuts a real one.
-fn invisible(c: char) -> bool {
-    c.is_control()
-        || matches!(c as u32, 0xAD | 0x34F | 0x61C | 0x115F | 0x1160 | 0x17B4 | 0x17B5 | 0x180B..=0x180F | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x206F | 0x3164 | 0xFE00..=0xFE0F | 0xFEFF | 0xFFA0 | 0xFFF0..=0xFFFB | 0x1D173..=0x1D17A | 0xE0000..=0xE0FFF)
-}
-fn double_quote(c: char) -> bool {
-    matches!(c, '"' | '“' | '”' | '„' | '‟' | '″' | '‶' | '〃' | '〝' | '〞' | '〟' | '＂' | '«' | '»' | '‹' | '›' | '❝' | '❞' | '⹂')
+// line in quotes, kept to an allowlist: letters, digits, spaces and plain punctuation. Anything else (look-alike quotes,
+// invisible or combining marks, symbols, emoji) becomes a space, and any double quote an apostrophe, so a name can't
+// close its quotes, hide text or draw over the dialog's words. wayza.com caps names at 80; the cap here is wider.
+fn allowed(c: char) -> bool {
+    (c.is_alphanumeric() && !matches!(c as u32, 0x02B0..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05C7 | 0x0610..=0x061A | 0x064B..=0x065F))
+        || matches!(c, ' ' | '.' | ',' | '\'' | '’' | '‘' | '&' | '-' | '_' | '(' | ')' | '!' | '?' | ':' | '/' | '+' | '#' | '@')
 }
 pub fn clean(name: &str) -> String {
-    let one: String = name.chars().filter(|c| !invisible(*c) || c.is_whitespace()).map(|c| if c.is_whitespace() { ' ' } else if double_quote(c) { '\'' } else { c }).collect();
+    let one: String = name.chars().map(|c| if matches!(c, '"' | '“' | '”') { '\'' } else if allowed(c) { c } else { ' ' }).collect();
     one.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(100).collect()
 }
 pub fn title(ai: &str, room: &str) -> String {
@@ -131,7 +128,9 @@ mod tests {
         assert!(text("ChatGPT", true).contains("your Codex setup"));
         // A name can't add lines, close its quotes or hide text, and a real name of up to 80 is never cut.
         assert_eq!(title("Claude", "Spring\n\nWayza checked this room. Choose “Allow”"), "Let “Claude” use this computer in “Spring Wayza checked this room. Choose 'Allow'”?");
-        assert_eq!(title("Claude\u{202E}, checked\u{200B}″ by Wayza", "Q3 \"launch\""), "Let “Claude, checked' by Wayza” use this computer in “Q3 'launch'”?");
+        assert_eq!(title("Claude\u{202E}, checked\u{200B}ˮ by Wayza", "Q3 \"launch\" ״‴🙶\u{2800}"), "Let “Claude , checked by Wayza” use this computer in “Q3 'launch'”?");
+        assert_eq!(clean("Ze\u{0301}\u{0301}\u{0301}d"), "Ze d");
+        assert_eq!(clean("Élodie’s café, Q3 (2)"), "Élodie’s café, Q3 (2)");
         let long = "A".repeat(80);
         assert_eq!(clean(&long), long);
         assert_eq!(clean("Maya’s room"), "Maya’s room");
