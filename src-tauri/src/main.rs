@@ -547,10 +547,14 @@ async fn activity(h: AppHandle, app: Shared) {
         for gpt in [false, true] {
             let flag = if gpt { &app.codex_revoked } else { &app.revoked };
             let at = app.revoked_at.lock().unwrap()[gpt as usize].clone();
-            let retry = match (flag.load(std::sync::atomic::Ordering::SeqCst), at) {
-                (true, Some((_, mark))) => signin_mark(&app, gpt) != mark,
-                _ => false,
+            let (retry, due) = match (flag.load(std::sync::atomic::Ordering::SeqCst), at) {
+                (true, Some((when, mark))) => (signin_mark(&app, gpt) != mark, (30 * 60..32 * 60).contains(&when.elapsed().as_secs())),
+                _ => (false, false),
             };
+            // 30 minutes on, the asks already waiting are tried here once too, the flag still set (build review 4, item 3).
+            if due && !retry {
+                catch_up(&h, &app).await;
+            }
             if retry {
                 log(&format!("{} sign-in may work again: trying", if gpt { "Codex" } else { "Claude Code" }));
                 app.revoked_at.lock().unwrap()[gpt as usize] = None;
@@ -579,7 +583,8 @@ fn get_claude_code(h: AppHandle) {
 async fn claude_sign_in(h: AppHandle) {
     let app = h.state::<Shared>().inner().clone();
     let Some(bin) = claude::find(&app.path) else { return };
-    app.revoked.store(false, std::sync::atomic::Ordering::SeqCst); // until Claude Code says otherwise
+    // The flag stays until the sign-in really changes on disk (after_sign_in), so a sign-in never finished doesn't show as
+    // signed in (build review 4, item 2).
     // Only the sign-in, in an empty folder of the app's own: `claude auth login` where this Claude Code has it, so no chat
     // opens and Claude Code never asks to trust the person's home folder (Graham, 2 Nov 2026: it asked to trust
     // /Users/graham just to sign in). An older one without it gets /login, still in that empty folder, which it may ask
@@ -612,7 +617,6 @@ fn codex_sign_in(h: AppHandle) {
     let app = h.state::<Shared>();
     let Some(bin) = codex::find(&app.path) else { return };
     let _ = std::fs::create_dir_all(app.codex_home());
-    app.codex_revoked.store(false, std::sync::atomic::Ordering::SeqCst);
     let cmd = codex::login_command(&bin, &app.codex_home());
     let script = format!("tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell", cmd.replace('\\', "\\\\").replace('"', "\\\""));
     let _ = std::process::Command::new("/usr/bin/osascript").args(["-e", &script]).spawn();
