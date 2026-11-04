@@ -17,14 +17,17 @@ fn class(c: char) -> char {
     static RE: OnceLock<[regex::Regex; 3]> = OnceLock::new();
     let re = RE.get_or_init(|| [regex::Regex::new(r"^\p{L}$").unwrap(), regex::Regex::new(r"^\p{N}$").unwrap(), regex::Regex::new(r"^\p{M}$").unwrap()]);
     let s = c.to_string();
-    // Hangul fillers are letters that draw as nothing; spacing modifier letters include look-alike quotes (ˮ).
-    if matches!(c as u32, 0x115F | 0x1160 | 0x3164 | 0xFFA0 | 0x02B0..=0x02FF) {
+    // Hangul fillers are letters that draw as nothing; these modifier letters draw as quotes (ˮ ʹ ߴ ꞌ ﾞ).
+    if matches!(c as u32, 0x115F | 0x1160 | 0x3164 | 0xFFA0 | 0x02B0..=0x02FF | 0x0374 | 0x07F4 | 0x07F5 | 0xA78B | 0xA78C | 0xFF9E) {
         '-'
     } else if re[0].is_match(&s) || re[1].is_match(&s) {
         'L'
     } else if re[2].is_match(&s) {
         'M'
-    } else if matches!(c, ' ' | '.' | ',' | '\'' | '’' | '‘' | '&' | '-' | '_' | '(' | ')' | '!' | '?' | ':' | '/' | '+' | '#' | '@') {
+    } else if matches!(c, '\u{200C}' | '\u{200D}') {
+        // Joiners some scripts need between letters (Sinhala, Persian): kept only there.
+        'J'
+    } else if matches!(c, ' ' | '.' | ',' | '\'' | '’' | '‘' | '&' | '-' | '_' | '(' | ')' | '!' | '?' | ':' | '/' | '+' | '#' | '@' | '·' | '・' | '（' | '）' | '、' | '，' | '。' | '《' | '》') {
         'P'
     } else {
         '-'
@@ -38,11 +41,24 @@ pub fn clean(name: &str) -> String {
         let c = if matches!(c, '"' | '“' | '”') { '\'' } else { c };
         match class(c) {
             'L' => { one.push(c); marks = 0; after_letter = true; }
+            'J' if after_letter => { one.push(c); after_letter = false; marks = 3; }
             'M' if after_letter && marks < 3 => { one.push(c); marks += 1; }
             'M' => {}
             'P' => { one.push(c); after_letter = false; }
             _ => { one.push(' '); after_letter = false; }
         }
+        // A joiner stays only with a letter on each side.
+        let mut it = one.chars().rev();
+        if let (Some(last), Some(before)) = (it.next(), it.next()) {
+            if matches!(before, '\u{200C}' | '\u{200D}') && class(last) != 'L' {
+                let l = one.pop().unwrap();
+                one.pop();
+                one.push(l);
+            }
+        }
+    }
+    while one.ends_with(['\u{200C}', '\u{200D}']) {
+        one.pop();
     }
     one.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(100).collect()
 }
@@ -65,12 +81,12 @@ pub const ALLOW: &str = "Allow";
 // What the AI says, word for word, when an ask needs this computer before a yes (CF5) or after "Don't allow" (CF6). A
 // room message, read on every device, so it names the computer.
 pub fn not_yet(computer: &str, room: &str) -> String {
-    let room = clean(room);
+    let room = quoted(room, "this room");
     // Only the Mac asks so far (Windows asks with the Windows app), so elsewhere there is nothing to choose yet.
     if !cfg!(target_os = "macos") {
         return format!("I can’t use {computer} in this room yet.");
     }
-    format!("I can’t use {computer} in this room yet. Open “{room}” in the Wayza app on {computer} and choose “Allow” when it asks.")
+    format!("I can’t use {computer} in this room yet. Open {room} in the Wayza app on {computer} and choose “Allow” when it asks.")
 }
 pub fn refused(computer: &str) -> String {
     format!("I can’t use {computer} in this room. “Don’t allow” was chosen on it. To ask again, set me to “Web and room” in this room’s settings, then back to “My computer too”.")
@@ -165,6 +181,9 @@ mod tests {
         assert_eq!(title("\u{3164}\u{3164}", "🎉🎉"), "Let your AI use this computer in this room?");
         assert!(text("🎉", false).starts_with("Your AI is set to"));
         assert_eq!(clean("नमस्ते ষ্ট สวัสดี"), "नमस्ते ষ্ট สวัสดี");
+        assert_eq!(clean("ශ්\u{200D}රී می\u{200C}خواهم 艾力·买买提 ジョン・スミス Q3（北京）"), "ශ්\u{200D}රී می\u{200C}خواهم 艾力·买买提 ジョン・スミス Q3（北京）");
+        assert_eq!(clean("a\u{200D}\u{200D} b\u{200D}"), "a b");
+        assert_eq!(title("Ana", "Spring ꞌꞌ ꞋꞋ ʹʹ ߴߴ ߵߵ ﾞ end"), "Let “Ana” use this computer in “Spring end”?");
         assert_eq!(clean("Zd\u{0E31}\u{0E31}\u{0E31}\u{0E31}\u{0E31}x"), "Zd\u{0E31}\u{0E31}\u{0E31}x");
         let long = "A".repeat(80);
         assert_eq!(clean(&long), long);
