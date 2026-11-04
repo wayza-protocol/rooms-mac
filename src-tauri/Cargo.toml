@@ -24,6 +24,14 @@ base64 = "0.22"
 rand = "0.8"
 url = "2"
 anyhow = "1"
+regex = "1" # Unicode classes for names in the "My computer too" dialog (ask.rs)
+
+# The system's own dialog on the Mac (ask.rs): the same versions Tauri already builds with.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+block2 = "0.6"
 
 [profile.release]
 strip = true
