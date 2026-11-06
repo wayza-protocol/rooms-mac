@@ -1,10 +1,12 @@
 # Builds the Mac app on a Mac runner. With the signing secrets set (Graham adds them once, like the Worker's secrets),
 # the build is signed with his Developer ID and notarised, disk image too; without them it is an unsigned build for
-# trying out. With the update key's secrets set too, the build updates itself and makes the signed update.
+# trying out.
 #
-# A tag like v0.1.1 (the version in tauri.conf.json) also puts the build up as a pre-release on this repo, which is
-# what wayza.com/download/mac and the app's update check serve (wayza-server src/wayza/mac-download.js). A tag needs
-# every secret: a release is never unsigned or without its update.
+# A tag like v0.1.1 (the version in tauri.conf.json) also puts the build up as a pre-release on this repo: the disk
+# image and the update (Wayza.app.tar.gz). The update key never leaves Graham's Mac, so its signature
+# (Wayza.app.tar.gz.sig) is made there and added to the release after; until it is, wayza.com tells installed apps
+# there is nothing new (wayza-server src/wayza/mac-download.js). A tag needs the signing secrets: a release is never
+# unsigned.
 name: Build
 on:
   push:
@@ -41,19 +43,9 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
         run: |
           if [ -z "$APPLE_CERTIFICATE" ]; then unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; fi
-          extra=()
-          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ -n "$TAURI_UPDATER_PUBKEY" ]; then
-            jq -n --arg k "$TAURI_UPDATER_PUBKEY" '{bundle: {createUpdaterArtifacts: true}, plugins: {updater: {pubkey: $k, endpoints: ["https://wayza.com/download/mac/latest.json"]}}}' > "$RUNNER_TEMP/updater.json"
-            extra=(--config "$RUNNER_TEMP/updater.json")
-          else
-            unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-          fi
-          npx tauri build --target universal-apple-darwin "${extra[@]}"
+          npx tauri build --target universal-apple-darwin
       # Tauri notarises the app inside; the disk image people download is notarised and stapled here, so it opens
       # without a warning even offline.
       - name: Notarise the disk image
@@ -81,7 +73,8 @@ jobs:
           b=src-tauri/target/universal-apple-darwin/release/bundle
           v=$(jq -r .version src-tauri/tauri.conf.json)
           [ "$TAG" = "v$v" ] || { echo "The tag $TAG isn't the version in tauri.conf.json ($v)."; exit 1; }
-          ls $b/dmg/*.dmg $b/macos/Wayza.app.tar.gz $b/macos/Wayza.app.tar.gz.sig || { echo "A release needs the signing and update secrets."; exit 1; }
-          xcrun stapler validate $b/dmg/*.dmg
+          xcrun stapler validate $b/dmg/*.dmg || { echo "A release needs the signing secrets."; exit 1; }
+          # The update is the notarised app itself, as the updater expects it: Wayza.app in a .tar.gz.
+          COPYFILE_DISABLE=1 tar -czf "$RUNNER_TEMP/Wayza.app.tar.gz" -C $b/macos Wayza.app
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --title "Wayza $v (test)" --notes "Test version of the Wayza app for Mac." \
-            $b/dmg/*.dmg $b/macos/Wayza.app.tar.gz $b/macos/Wayza.app.tar.gz.sig
+            $b/dmg/*.dmg "$RUNNER_TEMP/Wayza.app.tar.gz"

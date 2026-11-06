@@ -1,10 +1,9 @@
 // The app updates itself (agreed 5 Nov 2026, MacUpdate1). A while after it opens, and every six hours after that, it
-// asks wayza.com/download/mac/latest.json for a newer version; that answer comes from the newest release on this repo,
-// signed with the update key. A newer one downloads and installs quietly; the room page then shows "A new version of
+// asks wayza.com/download/mac/latest.json for a newer version; that answer comes from the newest release on this repo
+// once its update is signed with the update key (kept on Graham's Mac; its public half is in tauri.conf.json). A newer one downloads and installs quietly; the room page then shows "A new version of
 // Wayza is ready." with Restart, and the new version runs from the next start whether or not Restart is pressed.
 //
-// Only a build made with the update key has the updater turned on (the release workflow adds plugins.updater to the
-// config). A build without it, like a pull request's, never checks.
+// Only a build whose config has plugins.updater checks, and only on a Mac.
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Runtime};
@@ -17,7 +16,7 @@ pub fn ready() -> bool {
     READY.load(Ordering::SeqCst)
 }
 
-// Whether this build was made with the update key.
+// Whether this build checks for updates.
 pub fn on<R: Runtime>(h: &AppHandle<R>) -> bool {
     cfg!(target_os = "macos") && h.config().plugins.0.contains_key("updater")
 }
