@@ -1,6 +1,6 @@
 [package]
 name = "wayza-rooms"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "The Wayza app for Mac"
 license = "Apache-2.0"
@@ -25,6 +25,7 @@ rand = "0.8"
 url = "2"
 anyhow = "1"
 regex = "1" # Unicode classes for names in the "My computer too" dialog (ask.rs)
+tauri-plugin-updater = "2"
 
 # The system's own dialog on the Mac (ask.rs): the same versions Tauri already builds with.
 [target.'cfg(target_os = "macos")'.dependencies]

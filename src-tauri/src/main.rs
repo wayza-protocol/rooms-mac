@@ -10,6 +10,7 @@ mod auth;
 mod claude;
 mod ask;
 mod codex;
+mod update;
 
 use base64::Engine as _;
 use anyhow::{anyhow, Result};
@@ -136,9 +137,11 @@ impl App {
             s => s,
         }
     }
-    // What the page reads as window.wayzaMac: this Mac, Claude Code's and Codex's state, and the first Claude.
+    // What the page reads as window.wayzaMac: this Mac, Claude Code's and Codex's state, the first Claude, and "ready"
+    // once a new version of the app is installed (the page's update strip, MacUpdate1).
     fn page_state(&self) -> Value {
-        json!({ "mac": self.mac_id(), "os": OS, "claude": self.claude_state().as_str(), "codex": self.codex_state().as_str(), "ai": self.saved.lock().unwrap().ai.clone() })
+        json!({ "mac": self.mac_id(), "os": OS, "claude": self.claude_state().as_str(), "codex": self.codex_state().as_str(), "ai": self.saved.lock().unwrap().ai.clone(),
+            "update": if update::ready() { Some("ready") } else { None } })
     }
     // The makers whose sign-in has ended on this Mac, for wayza.com (NoticeB3).
     fn signed_out_makers(&self) -> Vec<&'static str> {
@@ -237,6 +240,7 @@ fn init_script(app: &App) -> String {
   document.addEventListener('wayza-passport', function (e) {{ var d = e.detail || {{}}; inv('open_passport', {{ address: String(d.address || '') }}); }});
   document.addEventListener('wayza-notification-settings', function () {{ inv('notification_settings'); }});
   document.addEventListener('wayza-sign-out', function () {{ inv('sign_out'); }});
+  document.addEventListener('wayza-restart', function () {{ inv('restart_for_update'); }});
   document.addEventListener('wayza-room-shown', function (e) {{ inv('room_shown', {{ room: String((e.detail || {{}}).room || '') }}); }});
 }})();"#,
         origin = serde_json::to_string(&url::Url::parse(BASE).unwrap().origin().ascii_serialization()).unwrap(),
@@ -270,6 +274,16 @@ fn push_state(h: &AppHandle) {
     let st = app.page_state();
     if let Some(w) = window(h) {
         let _ = w.eval(&format!("window.__wayzaMacSet && window.__wayzaMacSet({st})"));
+    }
+}
+
+// Restart on the update strip (MacUpdate1): the new version is already installed, so starting again runs it. Only once
+// one is ready, so a page can't restart the app for nothing.
+#[tauri::command]
+fn restart_for_update(h: AppHandle) {
+    if update::ready() {
+        log("restarting for the update");
+        h.restart();
     }
 }
 
@@ -1790,7 +1804,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, get_codex, codex_sign_in, computer_answer, open_help, open_passport, save_photo, notification_settings, sign_out, room_shown])
+        .invoke_handler(tauri::generate_handler![sign_in, bring, get_claude_code, claude_sign_in, get_codex, codex_sign_in, computer_answer, open_help, open_passport, save_photo, notification_settings, sign_out, room_shown, restart_for_update])
         .setup(|a| {
             let dir = a.path().app_config_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -1861,6 +1875,10 @@ fn main() {
             a.manage(app);
             tauri::async_runtime::spawn(live(a.handle().clone()));
             tauri::async_runtime::spawn(activity(a.handle().clone(), a.state::<Shared>().inner().clone()));
+            if update::on(a.handle()) {
+                a.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+                tauri::async_runtime::spawn(update::watch(a.handle().clone(), push_state));
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
