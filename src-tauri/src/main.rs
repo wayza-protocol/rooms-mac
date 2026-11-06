@@ -29,6 +29,12 @@ const BASE: &str = match option_env!("WAYZA_URL") {
     Some(u) => u,
     None => "https://wayza.com",
 };
+// Where the window's pages are (6 Nov 2026: everything that's yours lives on wayza.me): Rooms, invites, Settings and
+// signing in. Wayza's API, Help and the sign-in in the browser stay on wayza.com (BASE).
+const ME: &str = match option_env!("WAYZA_ME_URL") {
+    Some(u) => u,
+    None => "https://wayza.me",
+};
 
 // Which kind of computer this is, for Your computers and the room page ("this computer" either way).
 const OS: &str = if cfg!(windows) { "windows" } else { "mac" };
@@ -217,7 +223,7 @@ fn init_script(app: &App) -> String {
         r#"(function(){{
   // A top-level page that is neither wayza.com nor the app's own first page goes back to the rooms. Tauri asks route()
   // only about URLs the url crate can parse, and lets the rest load here (link-safety review 2, item 1).
-  if (window.top === window && location.origin !== {origin} && location.protocol !== 'tauri:') {{ location.replace({origin} + '/account/rooms'); return; }}
+  if (window.top === window && location.origin !== {origin} && location.protocol !== 'tauri:') {{ location.replace({origin} + '/rooms'); return; }}
   if (location.origin !== {origin}) return;
   // The account pages wear the app's header here, not the website's (AppAcct1): see site-chrome.js IN_MAC.
   var mark = function () {{ var d = document.documentElement; if (d) d.classList.add('in-mac'); return !!d; }};
@@ -239,7 +245,7 @@ fn init_script(app: &App) -> String {
   document.addEventListener('wayza-sign-out', function () {{ inv('sign_out'); }});
   document.addEventListener('wayza-room-shown', function (e) {{ inv('room_shown', {{ room: String((e.detail || {{}}).room || '') }}); }});
 }})();"#,
-        origin = serde_json::to_string(&url::Url::parse(BASE).unwrap().origin().ascii_serialization()).unwrap(),
+        origin = serde_json::to_string(&url::Url::parse(ME).unwrap().origin().ascii_serialization()).unwrap(),
         st = st
     )
 }
@@ -286,16 +292,34 @@ async fn do_sign_in(h: &AppHandle) -> Result<()> {
     if app.signing_in.swap(true, Ordering::SeqCst) {
         return Ok(()); // one browser sign-in at a time
     }
-    let r = sign_in_once(h, &app).await;
+    // The app is still signed in, only its window isn't (its cookie ended, or it moved to wayza.me): the window signs in
+    // again with the app's own sign-in, at most once a minute, before asking for the browser.
+    let r = if reenter(h, &app).await { Ok(()) } else { sign_in_once(h, &app).await };
     app.signing_in.store(false, Ordering::SeqCst);
     r
+}
+
+static REENTERED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+async fn reenter(h: &AppHandle, app: &Shared) -> bool {
+    use std::sync::atomic::Ordering;
+    let Some(session) = app.session() else { return false };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if now.saturating_sub(REENTERED.swap(now, Ordering::SeqCst)) < 60 {
+        return false;
+    }
+    let Ok(t) = app.api.post("/me/enter", Some(&session), json!({ "me": true })).await else { return false };
+    match (window(h), t["enter"].as_str().and_then(|e| e.parse::<url::Url>().ok())) {
+        (Some(w), Some(u)) => w.navigate(u).is_ok(),
+        _ => false,
+    }
 }
 
 async fn sign_in_once(h: &AppHandle, app: &Shared) -> Result<()> {
     let p = auth::pkce();
     let state = auth::random(24);
     let q = auth::round_trip("signin", &state, |port| {
-        let url = format!("{BASE}/account/rooms/mac/signin?challenge={}&port={port}&state={state}&mac={}", p.challenge, enc(&app.mac_name));
+        let url = format!("{ME}/rooms/mac/signin?challenge={}&port={port}&state={state}&mac={}", p.challenge, enc(&app.mac_name));
         h.opener().open_url(url, None::<&str>).map_err(|e| anyhow!(e.to_string()))
     })
     .await?;
@@ -355,7 +379,7 @@ async fn do_bring(h: &AppHandle, maker: &str, room: Option<String>, want: Option
         let p = auth::pkce();
         let state = auth::random(24);
         let q = auth::round_trip("bring", &state, |port| {
-            let url = format!("{BASE}/account/rooms/mac/bring?maker=claude&challenge={}&port={port}&state={state}&mac={}", p.challenge, enc(&app.mac_name));
+            let url = format!("{ME}/rooms/mac/bring?maker=claude&challenge={}&port={port}&state={state}&mac={}", p.challenge, enc(&app.mac_name));
             h.opener().open_url(url, None::<&str>).map_err(|e| anyhow!(e.to_string()))
         })
         .await?;
@@ -407,7 +431,7 @@ async fn bring_gpt(h: &AppHandle, app: &Shared, room: Option<String>, ais: Vec<S
         let p = auth::pkce();
         let state = auth::random(24);
         let q = auth::round_trip("bring", &state, |port| {
-            let url = format!("{BASE}/account/rooms/mac/bring?maker=chatgpt&challenge={}&port={port}&state={state}&mac={}", p.challenge, enc(&app.mac_name));
+            let url = format!("{ME}/rooms/mac/bring?maker=chatgpt&challenge={}&port={port}&state={state}&mac={}", p.challenge, enc(&app.mac_name));
             h.opener().open_url(url, None::<&str>).map_err(|e| anyhow!(e.to_string()))
         })
         .await?;
@@ -951,9 +975,9 @@ fn route(u: &url::Url) -> Route {
     if u.scheme() == "tauri" {
         return Route::Window;
     }
-    let base = url::Url::parse(BASE).unwrap();
-    let ours = u.scheme() == base.scheme() && u.origin() == base.origin();
-    if ours && u.as_str().starts_with(&format!("{BASE}/account/signin")) {
+    let me = url::Url::parse(ME).unwrap();
+    let ours = u.scheme() == me.scheme() && u.origin() == me.origin();
+    if ours && u.path().starts_with("/signin") && !u.path().starts_with("/signin/handoff") {
         return Route::SignIn;
     }
     if ours && in_window(u.path()) {
@@ -966,20 +990,20 @@ fn route(u: &url::Url) -> Route {
     }
 }
 
-// The wayza.com pages the app window shows: Rooms (and the invite links into them), records, and your account.
+// The wayza.me pages the app window shows: Rooms (and the invite links into them), records, and your settings.
 fn in_window(path: &str) -> bool {
-    // Pages wayza.com keeps from the app's own window (window-sessions.js there) open in your web browser instead:
-    // deleting the account, claiming an AI, and anything under /account the window doesn't use (build review 6).
+    // Pages wayza.me keeps from the app's own window (window-sessions.js on the server) open in your web browser
+    // instead: deleting the account, claiming an AI, and any part of Settings the window doesn't use (build review 6).
     let p = path.trim_end_matches('/');
-    let window_account = p == "/account"
-        || p == "/account/rooms" || p.starts_with("/account/rooms/")
-        || p.starts_with("/account/sign")
-        || ["/account/photo", "/account/turned-away", "/account/me.json"].contains(&p)
-        || (p.starts_with("/account/") && !p[9..].contains('/') && ACCOUNT_TABS.contains(&&p[9..]));
-    if p == "/account/rooms/mac/signin" || p == "/account/rooms/mac/bring" {
+    if p == "/rooms/mac/signin" || p == "/rooms/mac/bring" {
         return false;
     }
-    window_account || ["/rooms/", "/records/"].iter().any(|x| path.starts_with(x))
+    p == "/settings"
+        || p == "/rooms" || p.starts_with("/rooms/")
+        || p == "/signout" || p.starts_with("/signup")
+        || ["/settings/photo", "/settings/turned-away", "/settings/me.json"].contains(&p)
+        || (p.starts_with("/settings/") && !p[10..].contains('/') && ACCOUNT_TABS.contains(&&p[10..]))
+        || ["/join/", "/records/"].iter().any(|x| path.starts_with(x))
 }
 // The account page's sections (dashboard.js TABS on wayza.com).
 const ACCOUNT_TABS: &[&str] = &["front-door", "messages", "requests", "reach", "picture", "ais", "apps", "computers", "meet", "activity", "feedback", "security"];
@@ -1021,7 +1045,7 @@ async fn ask_here(h: &AppHandle) {
     let Some(w) = window(h) else { return };
     let Some(room) = app.shown.lock().unwrap().clone() else { return };
     // Only over that room's own page: the window may have gone elsewhere (the account page, sign-in) since it said so.
-    let on_room = |w: &WebviewWindow| w.url().map(|u| u.path().trim_end_matches('/') == format!("/account/rooms/{room}")).unwrap_or(false);
+    let on_room = |w: &WebviewWindow| w.url().map(|u| u.path().trim_end_matches('/') == format!("/rooms/{room}")).unwrap_or(false);
     if !w.is_focused().unwrap_or(false) || !on_room(&w) || app.asking.swap(true, SeqCst) {
         return;
     }
@@ -1819,7 +1843,7 @@ fn main() {
             // Where the app found each maker's program, so a "not on this computer" can be traced from the log.
             log(&format!("claude: {:?}; codex: {:?}", claude::find(&app.path), codex::find(&app.path)));
             let start = if app.session().is_some() {
-                WebviewUrl::External(format!("{BASE}/account/rooms").parse()?)
+                WebviewUrl::External(format!("{ME}/rooms").parse()?)
             } else {
                 WebviewUrl::App("index.html".into())
             };
@@ -1873,11 +1897,11 @@ mod tests {
 
     #[test]
     fn only_rooms_and_account_stay_in_the_window() {
-        for p in ["/account", "/account/reach", "/account/security", "/account/photo", "/account/rooms/room_1", "/rooms/join/abc", "/records/x"] {
+        for p in ["/settings", "/settings/reach", "/settings/security", "/settings/photo", "/rooms", "/rooms/room_1", "/join/abc", "/records/x", "/rooms/mac/enter"] {
             assert!(in_window(p), "{p}");
         }
-        for p in ["/", "/docs/", "/developers/", "/live", "/help/", "/passport/maya", "/accounts", "/roomsx", "/account/delete", "/account/agent-claim",
-            "/account/claim/abc", "/account/stats", "/account/notify", "/account/rooms/mac/signin", "/account/rooms/mac/bring", "/account/somewhere-new"] {
+        for p in ["/", "/docs/", "/graham", "/nowai", "/places", "/settingsx", "/roomsx", "/settings/delete", "/settings/agent-claim",
+            "/settings/claim/abc", "/settings/stats", "/settings/notify", "/rooms/mac/signin", "/rooms/mac/bring", "/settings/somewhere-new"] {
             assert!(!in_window(p), "{p}");
         }
     }
@@ -1896,16 +1920,19 @@ mod tests {
     fn every_navigation_goes_where_it_should() {
         let r = |s: &str| route(&url::Url::parse(s).unwrap());
         assert_eq!(r("tauri://localhost/index.html"), Route::Window);
-        assert_eq!(r(&format!("{BASE}/account/reach")), Route::Window);
-        assert_eq!(r(&format!("{BASE}/account/rooms/room_1")), Route::Window);
-        assert_eq!(r(&format!("{BASE}/rooms/join/abc")), Route::Window);
-        assert_eq!(r(&format!("{BASE}/account/signin?x=1")), Route::SignIn);
+        assert_eq!(r(&format!("{ME}/settings/reach")), Route::Window);
+        assert_eq!(r(&format!("{ME}/rooms/room_1")), Route::Window);
+        assert_eq!(r(&format!("{ME}/join/abc")), Route::Window);
+        assert_eq!(r(&format!("{ME}/signin?x=1")), Route::SignIn);
+        assert_eq!(r(&format!("{ME}/signin/handoff?t=x")), Route::Browser);
+        assert_eq!(r(&format!("{ME}/")), Route::Browser);
+        assert_eq!(r(&format!("{BASE}/account/rooms/room_1")), Route::Browser);
         assert_eq!(r(&format!("{BASE}/")), Route::Browser);
         assert_eq!(r(&format!("{BASE}/docs/")), Route::Browser);
         assert_eq!(r("https://example.com/x"), Route::Browser);
         assert_eq!(r("  HTTPS://example.com/x"), Route::Browser);
         assert_eq!(r("MAILTO:a@b.c"), Route::Browser);
-        for s in [format!("blob:{BASE}/x"), "blob:https://example.com/x".into(), "about:blank".into(), "file:///etc/passwd".into(),
+        for s in [format!("blob:{ME}/x"), "blob:https://example.com/x".into(), "about:blank".into(), "file:///etc/passwd".into(),
                   "data:text/html,hi".into(), "javascript:alert(1)".into()] {
             assert_eq!(r(&s), Route::Drop, "{s}");
         }

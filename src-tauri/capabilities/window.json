@@ -5,7 +5,7 @@
   "windows": ["main"],
   "platforms": ["macOS"],
   "remote": {
-    "urls": ["https://wayza.com/account", "https://wayza.com/account/*", "https://wayza.com/rooms/*"]
+    "urls": ["https://wayza.me/settings", "https://wayza.me/settings/*", "https://wayza.me/rooms", "https://wayza.me/rooms/*", "https://wayza.me/join/*"]
   },
   "permissions": ["core:window:allow-start-dragging", "core:window:allow-internal-toggle-maximize"]
 }

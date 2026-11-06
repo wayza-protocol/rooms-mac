@@ -73,7 +73,8 @@ impl Api {
     }
     // The app's own session, from the code the browser brought back.
     pub async fn token(&self, code: &str, verifier: &str) -> Result<Value> {
-        self.post("/mac/token", None, json!({ "code": code, "code_verifier": verifier })).await
+        // me: this app's window shows wayza.me, so its way in is there.
+        self.post("/mac/token", None, json!({ "code": code, "code_verifier": verifier, "me": true })).await
     }
     // The AI the person said yes to: its address and a new key.
     // v: 2, so wayza.com hands this app no key: it acts as the AI with its own sign-in.
