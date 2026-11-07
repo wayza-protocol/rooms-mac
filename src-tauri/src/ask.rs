@@ -102,6 +102,21 @@ pub async fn dialog(w: &tauri::WebviewWindow, title: String, text: String) -> Op
     rx.await.ok()
 }
 
+// A plain message on the window with its buttons, the first one the default (Return) and the last one Esc: the index of
+// the one pressed, or None when it couldn't be shown. For Check for Updates… (update.rs).
+#[cfg(target_os = "macos")]
+pub async fn alert(w: &tauri::WebviewWindow, title: String, text: String, buttons: &'static [&'static str]) -> Option<usize> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<usize>();
+    let win = w.clone();
+    w.run_on_main_thread(move || mac::alert(&win, &title, &text, buttons, tx)).ok()?;
+    rx.await.ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn alert(_w: &tauri::WebviewWindow, _title: String, _text: String, _buttons: &'static [&'static str]) -> Option<usize> {
+    None
+}
+
 // Windows' TaskDialog comes with the Windows app (rooms-mac draft #27): until then no other system asks, so no other
 // system ever uses the computer.
 #[cfg(not(target_os = "macos"))]
@@ -115,11 +130,48 @@ mod mac {
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSEvent, NSEventMask, NSModalResponse, NSWindow};
+    use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSEvent, NSEventMask, NSModalResponse, NSWindow};
     use objc2_foundation::NSString;
     use std::cell::RefCell;
     use std::ptr::NonNull;
     use std::rc::Rc;
+
+    // NSAlert as a sheet on the app's window with the given buttons, the first one the default. NSAlert gives Esc only
+    // to a button titled "Cancel", so while the sheet is up a key monitor makes Esc press the last button (Later, OK).
+    pub fn alert(w: &tauri::WebviewWindow, title: &str, text: &str, buttons: &[&str], tx: tokio::sync::oneshot::Sender<usize>) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let Ok(ptr) = w.ns_window() else { return };
+        let Some(window) = (unsafe { Retained::retain(ptr as *mut NSWindow) }) else { return };
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(title));
+        alert.setInformativeText(&NSString::from_str(text));
+        let mut last = None;
+        for b in buttons {
+            last = Some(alert.addButtonWithTitle(&NSString::from_str(b)));
+        }
+        let Some(last) = last else { return };
+        let esc = RcBlock::new(move |e: NonNull<NSEvent>| -> *mut NSEvent {
+            let ev = unsafe { e.as_ref() };
+            if ev.keyCode() == 53 {
+                unsafe { last.performClick(None) };
+                return std::ptr::null_mut();
+            }
+            e.as_ptr()
+        });
+        let monitor: Rc<RefCell<Option<Retained<AnyObject>>>> =
+            Rc::new(RefCell::new(unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &esc) }));
+        let tx = RefCell::new(Some(tx));
+        let m = monitor.clone();
+        let done = RcBlock::new(move |r: NSModalResponse| {
+            if let Some(mon) = m.borrow_mut().take() {
+                unsafe { NSEvent::removeMonitor(&mon) };
+            }
+            if let Some(tx) = tx.borrow_mut().take() {
+                let _ = tx.send((r - NSAlertFirstButtonReturn).max(0) as usize);
+            }
+        });
+        alert.beginSheetModalForWindow_completionHandler(&window, Some(&done));
+    }
 
     // NSAlert as a sheet on the app's window: the app icon, the question, the text, and "Don't allow" first, so it is
     // the default (trailing, Return). NSAlert gives Esc only to a button titled "Cancel", so while the sheet is up a

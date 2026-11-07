@@ -25,22 +25,56 @@ pub fn on<R: Runtime>(h: &AppHandle<R>) -> bool {
 pub async fn watch<R: Runtime>(h: AppHandle<R>, on_ready: impl Fn(&AppHandle<R>)) {
     tokio::time::sleep(Duration::from_secs(60)).await;
     loop {
-        match once(&h).await {
-            Ok(Some(v)) => {
-                crate::log(&format!("update {v} installed; runs after a restart"));
-                READY.store(true, Ordering::SeqCst);
+        match check(&h).await {
+            Checked::Ready => {
                 on_ready(&h);
                 return;
             }
-            Ok(None) => {}
-            Err(e) => crate::log(&format!("update check failed: {e}")),
+            _ => tokio::time::sleep(Duration::from_secs(6 * 3600)).await,
         }
-        tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
     }
 }
 
-async fn once<R: Runtime>(h: &AppHandle<R>) -> anyhow::Result<Option<String>> {
-    let Some(u) = h.updater()?.check().await? else { return Ok(None) };
-    u.download_and_install(|_, _| {}, || {}).await?;
-    Ok(Some(u.version.clone()))
+// What one check found.
+pub enum Checked {
+    // A newer version is installed and runs after a restart.
+    Ready,
+    // This is the newest version.
+    Newest,
+    // wayza.com couldn't be asked: most likely no internet.
+    NoAnswer,
+    // A newer version was found, but downloading it, checking its signature or installing it failed.
+    NotInstalled,
+}
+
+// One check, never two at once (the timer's and Check for Updates…).
+pub async fn check<R: Runtime>(h: &AppHandle<R>) -> Checked {
+    static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = ONE.lock().await;
+    if ready() {
+        return Checked::Ready;
+    }
+    let found = match h.updater() {
+        Ok(u) => u.check().await,
+        Err(e) => Err(e),
+    };
+    let u = match found {
+        Ok(Some(u)) => u,
+        Ok(None) => return Checked::Newest,
+        Err(e) => {
+            crate::log(&format!("update check failed: {e}"));
+            return Checked::NoAnswer;
+        }
+    };
+    match u.download_and_install(|_, _| {}, || {}).await {
+        Ok(()) => {
+            crate::log(&format!("update {} installed; runs after a restart", u.version));
+            READY.store(true, Ordering::SeqCst);
+            Checked::Ready
+        }
+        Err(e) => {
+            crate::log(&format!("update {} not installed: {e}", u.version));
+            Checked::NotInstalled
+        }
+    }
 }
