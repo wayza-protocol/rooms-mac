@@ -26,4 +26,4 @@ GitHub Actions builds every push on a Mac runner. When the repo has the `APPLE_*
 
 ## Releases
 
-Bump the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`, then push a tag `v` + that version. The build puts the disk image and the update (`Wayza.app.tar.gz`) up as a pre-release here, and wayza.com/download/mac sends people to the newest disk image. The update key stays on Graham's Mac (`~/.tauri`): sign the release's `Wayza.app.tar.gz` there with `npx @tauri-apps/cli@2 signer sign` and add the `.sig` to the release; from then on installed apps update to it.
+Bump the version in `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` and `package.json`, and merge to main (or push a tag `v` + that version). The build puts the disk image and the update (`Wayza.app.tar.gz`) up as a pre-release here, and wayza.com/download/mac sends people to the newest disk image. The update key stays on Graham's Mac (`~/.tauri`): sign the release's `Wayza.app.tar.gz` there with `npx @tauri-apps/cli@2 signer sign` and add the `.sig` to the release; from then on installed apps update to it.

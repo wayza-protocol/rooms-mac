@@ -2,8 +2,8 @@
 # the build is signed with his Developer ID and notarised, disk image too; without them it is an unsigned build for
 # trying out.
 #
-# A tag like v0.1.1 (the version in tauri.conf.json) also puts the build up as a pre-release on this repo: the disk
-# image and the update (Wayza.app.tar.gz). The update key never leaves Graham's Mac, so its signature
+# A new version in tauri.conf.json, pushed to main (or a tag like v0.1.1 naming it), also puts the build up as a
+# pre-release on this repo, tagged v + the version, once: the disk image and the update (Wayza.app.tar.gz). The update key never leaves Graham's Mac, so its signature
 # (Wayza.app.tar.gz.sig) is made there and added to the release after; until it is, wayza.com tells installed apps
 # there is nothing new (wayza-server src/wayza/mac-download.js). A tag needs the signing secrets: a release is never
 # unsigned.
@@ -65,16 +65,16 @@ jobs:
           name: Wayza-mac
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
       - name: Put the test release up
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
           b=src-tauri/target/universal-apple-darwin/release/bundle
-          v=$(jq -r .version src-tauri/tauri.conf.json)
-          [ "$TAG" = "v$v" ] || { echo "The tag $TAG isn't the version in tauri.conf.json ($v)."; exit 1; }
+          v=$(jq -r .version src-tauri/tauri.conf.json); TAG="v$v"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "$TAG" ]; then echo "The tag $GITHUB_REF_NAME isn't the version in tauri.conf.json ($v)."; exit 1; fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo "$TAG is already up."; exit 0; fi
           xcrun stapler validate $b/dmg/*.dmg || { echo "A release needs the signing secrets."; exit 1; }
           # The update is the notarised app itself, as the updater expects it: Wayza.app in a .tar.gz.
           COPYFILE_DISABLE=1 tar -czf "$RUNNER_TEMP/Wayza.app.tar.gz" -C $b/macos Wayza.app
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --title "Wayza $v (test)" --notes "Test version of the Wayza app for Mac." \
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "Wayza $v (test)" --notes "Test version of the Wayza app for Mac." \
             $b/dmg/*.dmg "$RUNNER_TEMP/Wayza.app.tar.gz"
