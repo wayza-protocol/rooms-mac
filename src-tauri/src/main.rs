@@ -1010,7 +1010,7 @@ fn in_window(path: &str) -> bool {
     // Pages wayza.me keeps from the app's own window (window-sessions.js on the server) open in your web browser
     // instead: deleting the account, claiming an AI, and any part of Settings the window doesn't use (build review 6).
     let p = path.trim_end_matches('/');
-    if p == "/rooms/mac/signin" || p == "/rooms/mac/bring" {
+    if p == "/rooms/mac/signin" || p == "/rooms/mac/bring" || p == "/signin/handoff" || p.starts_with("/signin/handoff/") {
         return false;
     }
     if p == "/settings" || p.starts_with("/settings/") {
@@ -1924,7 +1924,7 @@ mod tests {
             assert!(in_window(p), "{p}");
         }
         for p in ["/settings/delete", "/settings/agent-claim", "/settings/claim/abc", "/settings/stats", "/settings/notify",
-            "/rooms/mac/signin", "/rooms/mac/bring", "/settings/somewhere-new", "/.well-known/x", "/cdn-cgi/rum"] {
+            "/rooms/mac/signin", "/rooms/mac/bring", "/settings/somewhere-new", "/.well-known/x", "/cdn-cgi/rum", "/signin/handoff"] {
             assert!(!in_window(p), "{p}");
         }
     }
