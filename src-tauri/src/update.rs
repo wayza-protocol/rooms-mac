@@ -25,17 +25,35 @@ pub fn on<R: Runtime>(h: &AppHandle<R>) -> bool {
 pub async fn watch<R: Runtime>(h: AppHandle<R>, on_ready: impl Fn(&AppHandle<R>)) {
     tokio::time::sleep(Duration::from_secs(60)).await;
     loop {
-        match once(&h).await {
-            Ok(Some(v)) => {
-                crate::log(&format!("update {v} installed; runs after a restart"));
-                READY.store(true, Ordering::SeqCst);
+        match check(&h).await {
+            Some(true) => {
                 on_ready(&h);
                 return;
             }
-            Ok(None) => {}
-            Err(e) => crate::log(&format!("update check failed: {e}")),
+            _ => tokio::time::sleep(Duration::from_secs(6 * 3600)).await,
         }
-        tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
+    }
+}
+
+// One check, never two at once (the timer's and Check for Updates…): Some(true) when a newer version is installed and
+// runs after a restart, Some(false) when this is the newest, None when the check failed.
+pub async fn check<R: Runtime>(h: &AppHandle<R>) -> Option<bool> {
+    static ONE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one = ONE.lock().await;
+    if ready() {
+        return Some(true);
+    }
+    match once(h).await {
+        Ok(Some(v)) => {
+            crate::log(&format!("update {v} installed; runs after a restart"));
+            READY.store(true, Ordering::SeqCst);
+            Some(true)
+        }
+        Ok(None) => Some(false),
+        Err(e) => {
+            crate::log(&format!("update check failed: {e}"));
+            None
+        }
     }
 }
 

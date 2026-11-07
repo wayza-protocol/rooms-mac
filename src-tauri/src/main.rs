@@ -293,6 +293,28 @@ fn restart_for_update(h: AppHandle) {
     }
 }
 
+// Wayza > Check for Updates… (Graham, 7 Nov 2026): check now instead of waiting for the next timed check, and say what
+// happened in the system's own message on the window.
+async fn check_now(h: AppHandle) {
+    let Some(w) = window(&h) else { return };
+    match update::check(&h).await {
+        Some(true) => {
+            push_state(&h);
+            if ask::alert(&w, "A new version of Wayza is ready.".into(), "It installs when you restart.".into(), &["Restart", "Later"]).await == Some(0) {
+                log("restarting for the update");
+                h.restart();
+            }
+        }
+        Some(false) => {
+            let v = h.package_info().version.to_string();
+            ask::alert(&w, "You’re up to date.".into(), format!("Wayza {v} is the newest version."), &["OK"]).await;
+        }
+        None => {
+            ask::alert(&w, "Couldn’t check for updates.".into(), "Check your internet connection and try again.".into(), &["OK"]).await;
+        }
+    }
+}
+
 // ---------- signing in (MacFirst1, MacSignin1) ----------
 
 #[tauri::command]
@@ -1905,6 +1927,18 @@ fn main() {
             if update::on(a.handle()) {
                 a.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
                 tauri::async_runtime::spawn(update::watch(a.handle().clone(), push_state));
+                // The Mac's own menu, with Check for Updates… after About Wayza, where Mac apps keep it.
+                let menu = tauri::menu::Menu::default(a.handle())?;
+                if let Some(app_menu) = menu.items()?.first().and_then(|i| i.as_submenu()) {
+                    let item = tauri::menu::MenuItem::with_id(a.handle(), "check-updates", "Check for Updates…", true, None::<&str>)?;
+                    app_menu.insert(&item, 1)?;
+                }
+                a.handle().set_menu(menu)?;
+                a.handle().on_menu_event(|h, e| {
+                    if e.id() == "check-updates" {
+                        tauri::async_runtime::spawn(check_now(h.clone()));
+                    }
+                });
             }
             Ok(())
         })
