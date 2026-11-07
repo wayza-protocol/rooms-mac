@@ -226,7 +226,7 @@ fn init_script(app: &App) -> String {
         r#"(function(){{
   // A top-level page that is neither wayza.com nor the app's own first page goes back to the rooms. Tauri asks route()
   // only about URLs the url crate can parse, and lets the rest load here (link-safety review 2, item 1).
-  if (window.top === window && location.origin !== {origin} && location.protocol !== 'tauri:') {{ location.replace({origin} + '/rooms'); return; }}
+  if (window.top === window && location.origin !== {origin} && location.protocol !== 'tauri:') {{ location.replace({origin} + '/'); return; }}
   if (location.origin !== {origin}) return;
   // The account pages wear the app's header here, not the website's (AppAcct1): see site-chrome.js IN_MAC.
   var mark = function () {{ var d = document.documentElement; if (d) d.classList.add('in-mac'); return !!d; }};
@@ -1004,20 +1004,23 @@ fn route(u: &url::Url) -> Route {
     }
 }
 
-// The wayza.me pages the app window shows: Rooms (and the invite links into them), records, and your settings.
+// The wayza.me pages the app window shows: since 7 Nov 2026 all of wayza.me's own (navigation): Home (the feed), Chats,
+// Rooms (and the invite links into them), Places and the places themselves, passports, records and your settings.
 fn in_window(path: &str) -> bool {
     // Pages wayza.me keeps from the app's own window (window-sessions.js on the server) open in your web browser
     // instead: deleting the account, claiming an AI, and any part of Settings the window doesn't use (build review 6).
     let p = path.trim_end_matches('/');
-    if p == "/rooms/mac/signin" || p == "/rooms/mac/bring" {
+    if p == "/rooms/mac/signin" || p == "/rooms/mac/bring" || p == "/signin/handoff" || p.starts_with("/signin/handoff/") {
         return false;
     }
-    p == "/settings"
-        || p == "/rooms" || p.starts_with("/rooms/")
-        || p == "/signout" || p.starts_with("/signup")
-        || ["/settings/photo", "/settings/turned-away", "/settings/me.json"].contains(&p)
-        || (p.starts_with("/settings/") && !p[10..].contains('/') && ACCOUNT_TABS.contains(&&p[10..]))
-        || ["/join/", "/records/"].iter().any(|x| path.starts_with(x))
+    if p == "/settings" || p.starts_with("/settings/") {
+        return p == "/settings"
+            || ["/settings/photo", "/settings/turned-away", "/settings/me.json"].contains(&p)
+            || (!p[10..].contains('/') && ACCOUNT_TABS.contains(&&p[10..]));
+    }
+    // Anything else on wayza.me: Home, Chats, Rooms, Places, a place or a passport. A wayza.me page the window can't use
+    // answers with a way back, and wayza.com's pages (help, docs) open in your web browser as before.
+    !p.starts_with("/.") && !p.starts_with("/cdn-cgi/")
 }
 // The account page's sections (dashboard.js TABS on wayza.com).
 const ACCOUNT_TABS: &[&str] = &["front-door", "messages", "requests", "reach", "picture", "ais", "apps", "computers", "meet", "activity", "feedback", "security"];
@@ -1857,7 +1860,7 @@ fn main() {
             // Where the app found each maker's program, so a "not on this computer" can be traced from the log.
             log(&format!("claude: {:?}; codex: {:?}", claude::find(&app.path), codex::find(&app.path)));
             let start = if app.session().is_some() {
-                WebviewUrl::External(format!("{ME}/rooms").parse()?)
+                WebviewUrl::External(format!("{ME}/").parse()?)
             } else {
                 WebviewUrl::App("index.html".into())
             };
@@ -1914,12 +1917,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_rooms_and_account_stay_in_the_window() {
-        for p in ["/settings", "/settings/reach", "/settings/security", "/settings/photo", "/rooms", "/rooms/room_1", "/join/abc", "/records/x", "/rooms/mac/enter"] {
+    fn wayza_me_pages_stay_in_the_window() {
+        for p in ["/", "/chats", "/chats/priya", "/chats/new", "/places", "/places/new", "/nowai", "/nowai/t/abc", "/graham", "/graham/ai-2",
+            "/settings", "/settings/reach", "/settings/security", "/settings/photo", "/rooms", "/rooms/room_1", "/join/abc", "/records/x",
+            "/rooms/mac/enter", "/signout"] {
             assert!(in_window(p), "{p}");
         }
-        for p in ["/", "/docs/", "/graham", "/nowai", "/places", "/settingsx", "/roomsx", "/settings/delete", "/settings/agent-claim",
-            "/settings/claim/abc", "/settings/stats", "/settings/notify", "/rooms/mac/signin", "/rooms/mac/bring", "/settings/somewhere-new"] {
+        for p in ["/settings/delete", "/settings/agent-claim", "/settings/claim/abc", "/settings/stats", "/settings/notify",
+            "/rooms/mac/signin", "/rooms/mac/bring", "/settings/somewhere-new", "/.well-known/x", "/cdn-cgi/rum", "/signin/handoff"] {
             assert!(!in_window(p), "{p}");
         }
     }
@@ -1943,7 +1948,10 @@ mod tests {
         assert_eq!(r(&format!("{ME}/join/abc")), Route::Window);
         assert_eq!(r(&format!("{ME}/signin?x=1")), Route::SignIn);
         assert_eq!(r(&format!("{ME}/signin/handoff?t=x")), Route::Browser);
-        assert_eq!(r(&format!("{ME}/")), Route::Browser);
+        assert_eq!(r(&format!("{ME}/")), Route::Window);
+        assert_eq!(r(&format!("{ME}/chats/priya")), Route::Window);
+        assert_eq!(r(&format!("{ME}/nowai")), Route::Window);
+        assert_eq!(r(&format!("{ME}/settings/delete")), Route::Browser);
         assert_eq!(r(&format!("{BASE}/account/rooms/room_1")), Route::Browser);
         assert_eq!(r(&format!("{BASE}/")), Route::Browser);
         assert_eq!(r(&format!("{BASE}/docs/")), Route::Browser);
