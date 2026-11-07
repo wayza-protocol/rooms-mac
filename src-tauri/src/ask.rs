@@ -102,8 +102,8 @@ pub async fn dialog(w: &tauri::WebviewWindow, title: String, text: String) -> Op
     rx.await.ok()
 }
 
-// A plain message on the window with its buttons, the first one the default (Return): the index of the one pressed, or
-// None when it couldn't be shown. For Check for Updates… (update.rs).
+// A plain message on the window with its buttons, the first one the default (Return) and the last one Esc: the index of
+// the one pressed, or None when it couldn't be shown. For Check for Updates… (update.rs).
 #[cfg(target_os = "macos")]
 pub async fn alert(w: &tauri::WebviewWindow, title: String, text: String, buttons: &'static [&'static str]) -> Option<usize> {
     let (tx, rx) = tokio::sync::oneshot::channel::<usize>();
@@ -136,7 +136,8 @@ mod mac {
     use std::ptr::NonNull;
     use std::rc::Rc;
 
-    // NSAlert as a sheet on the app's window with the given buttons, the first one the default.
+    // NSAlert as a sheet on the app's window with the given buttons, the first one the default. NSAlert gives Esc only
+    // to a button titled "Cancel", so while the sheet is up a key monitor makes Esc press the last button (Later, OK).
     pub fn alert(w: &tauri::WebviewWindow, title: &str, text: &str, buttons: &[&str], tx: tokio::sync::oneshot::Sender<usize>) {
         let Some(mtm) = MainThreadMarker::new() else { return };
         let Ok(ptr) = w.ns_window() else { return };
@@ -144,11 +145,27 @@ mod mac {
         let alert = NSAlert::new(mtm);
         alert.setMessageText(&NSString::from_str(title));
         alert.setInformativeText(&NSString::from_str(text));
+        let mut last = None;
         for b in buttons {
-            alert.addButtonWithTitle(&NSString::from_str(b));
+            last = Some(alert.addButtonWithTitle(&NSString::from_str(b)));
         }
+        let Some(last) = last else { return };
+        let esc = RcBlock::new(move |e: NonNull<NSEvent>| -> *mut NSEvent {
+            let ev = unsafe { e.as_ref() };
+            if ev.keyCode() == 53 {
+                unsafe { last.performClick(None) };
+                return std::ptr::null_mut();
+            }
+            e.as_ptr()
+        });
+        let monitor: Rc<RefCell<Option<Retained<AnyObject>>>> =
+            Rc::new(RefCell::new(unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &esc) }));
         let tx = RefCell::new(Some(tx));
+        let m = monitor.clone();
         let done = RcBlock::new(move |r: NSModalResponse| {
+            if let Some(mon) = m.borrow_mut().take() {
+                unsafe { NSEvent::removeMonitor(&mon) };
+            }
             if let Some(tx) = tx.borrow_mut().take() {
                 let _ = tx.send((r - NSAlertFirstButtonReturn).max(0) as usize);
             }
